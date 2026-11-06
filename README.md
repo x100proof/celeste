@@ -103,6 +103,14 @@ under systemd or similar to keep it alive.
 
 Note that the logs include the visitor's IP address and browser user agent.
 
+## Credits
+
+- Earth texture: NASA Earth Observatory / NASA Goddard Space Flight Center,
+  "Blue Marble" land and oceans mosaic (public domain), via Wikimedia Commons.
+- Planet spin axes: IAU Working Group on Cartographic Coordinates and
+  Rotational Elements (north pole right ascension / declination).
+- Rendering: three.js (MIT).
+
 ## Project layout
 
 ```
@@ -119,6 +127,7 @@ src/ribbon.js             antialiased glow lines
 src/debug.js              remote debug logging
 src/watchdog-worker.js    freeze watchdog
 vendor/three/             three.js r170 (MIT, see vendor/three/LICENSE)
+textures/earth.jpg        Earth surface: NASA Earth Observatory "Blue Marble" (public domain)
 deploy/                   deploy script and nginx example
 tools/log-server.py       optional debug-log receiver
 ```

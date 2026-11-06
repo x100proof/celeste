@@ -59,8 +59,9 @@ resize();
 const sim = new Sim();
 
 const LIME = [0.45, 1.0, 0.6];
-const sun = createSun(SUN.radius);
+const sun = createSun(SUN.radius, SUN.pole);
 scene.add(sun.mesh);
+scene.add(sun.group);
 
 const planets = PLANETS.map((p) => {
   const vis = createPlanet(p);
@@ -175,7 +176,7 @@ function sweepLabels() {
 // ------------------------------------------------------------------ camera
 
 // mode 'cine': the cinematic director frames each phase; 'manual': the player panned/zoomed
-const cam = { x: 0, y: 0, halfH: 70, target: 70, follow: true, mode: 'cine' };
+const cam = { x: 0, y: 0, halfH: 70, target: 70, follow: true, mode: 'cine', track: null };
 const camOff = { x: 0, y: 0 }; // cinematic framing centre, relative to the ship
 // phase changes blend from the previous shot to the new one; within a phase the shot is tracked exactly
 const camBlend = { phase: '', t: 1, fromX: 0, fromY: 0 };
@@ -193,7 +194,7 @@ function screenToWorld(sx, sy) {
 function zoomBy(f, sx, sy) {
   toManual();
   const nh = Math.min(ZMAX, Math.max(ZMIN, cam.halfH * f));
-  if (!cam.follow && sx !== undefined) {
+  if (!cam.follow && !cam.track && sx !== undefined) {
     const [wx, wy] = screenToWorld(sx, sy);
     const r = nh / cam.halfH;
     cam.x = wx + (cam.x - wx) * r;
@@ -224,7 +225,22 @@ function nudgeWarp(d) {
   toast(warpNudge === 0 ? 'Time: auto' : `Time: auto ${f >= 1 ? '×' + f : '÷' + 1 / f}`, 'burns always play at viewing speed', 'go');
 }
 function fmtWarp(w) { return w >= 10 ? Math.round(w) : w >= 1 ? w.toFixed(1).replace(/\.0$/, '') : w.toFixed(2).replace(/0$/, ''); }
+// ---- pause: freezes game time (ship, planets, burns, autopilot); camera still works
+let paused = false;
+function setPaused(v) {
+  paused = v;
+  const b = document.getElementById('b-pause');
+  b.classList.toggle('on', v);
+  b.innerHTML = v
+    ? '<svg viewBox="0 0 24 24"><path d="M8 5.5v13l11-6.5z" fill="currentColor" stroke="none"/></svg>'
+    : '<svg viewBox="0 0 24 24"><path d="M8.5 5.5v13M15.5 5.5v13" stroke-width="3"/></svg>';
+  b.title = v ? 'Play (Space)' : 'Pause (Space)';
+  b.setAttribute('aria-label', v ? 'Play' : 'Pause');
+  dbg.record('event', v ? 'paused' : 'resumed', { t: sim.t });
+  updateWarpLabel();
+}
 function updateWarpLabel() {
+  if (paused) { warpEl.innerHTML = 'II<small>paused</small>'; warpEl.classList.remove('fast', 'slow'); return; }
   const f = Math.pow(2, warpNudge);
   warpEl.innerHTML = `${fmtWarp(warp)}×<small>${warpNudge === 0 ? 'auto' : f >= 1 ? 'auto ×' + f : 'auto ÷' + 1 / f}</small>`;
   warpEl.classList.toggle('fast', warp > 1.5);
@@ -235,7 +251,23 @@ function setGhosts(v) {
   ghostsOn = v;
   document.getElementById('b-ghost').classList.toggle('on', v);
 }
+// Click-to-focus: the camera glides to a body (or the ship) and keeps it centred.
+// cam.track = { kind: 'ship' } | { kind: 'body', i } (i = -1 for the Sun).
+const trackOff = { x: 0, y: 0 };
+function trackPos(tr) {
+  if (tr.kind === 'ship') { sim.world(wst); return sim.alive ? [wst[0], wst[1]] : [deadAnchor.x, deadAnchor.y]; }
+  bodyState(tr.i, sim.t, ps);
+  return [ps[0], ps[1]];
+}
+function focusOn(tr) {
+  toManual();
+  cam.track = tr; cam.follow = false;
+  const [x, y] = trackPos(tr);
+  trackOff.x = cam.x - x; trackOff.y = cam.y - y; // glide in from the current view
+  dbg.record('event', 'focus', tr);
+}
 function recenter() {
+  cam.track = null;
   cam.follow = true; cam.mode = 'cine';
   sim.world(wst); camOff.x = cam.x - wst[0]; camOff.y = cam.y - wst[1]; // glide from where we are
   Object.assign(camSpring, { x: camOff.x, y: camOff.y, vx: 0, vy: 0, lh: Math.log(cam.halfH), vlh: 0 });
@@ -268,6 +300,7 @@ addEventListener('keydown', (e) => {
   else if (k === 'g' || k === 'G') setGhosts(!ghostsOn);
   else if (k === 'c' || k === 'C') recenter();
   else if (k === 't' || k === 'T') cycleTarget();
+  else if (k === ' ' && !e.repeat) setPaused(!paused);
 
   else if (k === '+' || k === '=') zoomStep(1 / 1.6);
   else if (k === '-' || k === '_') zoomStep(1.6);
@@ -373,6 +406,7 @@ function updateTargetButtons() {
 }
 btn('b-pro', () => setHold(hold === 'pro' ? null : 'pro'));
 btn('b-retro', () => setHold(hold === 'retro' ? null : 'retro'));
+btn('b-pause', () => setPaused(!paused));
 btn('b-wdown', () => nudgeWarp(-1));
 btn('b-wup', () => nudgeWarp(1));
 
@@ -399,6 +433,19 @@ document.getElementById('t-fine').addEventListener('click', (e) => {
 const pointers = new Map();
 let gesture = null;
 let tapStart = null;
+/** What was clicked: the ship, a planet or the Sun (nearest within reach), else null. */
+function pickFocus(sx, sy) {
+  if (sim.alive) {
+    sim.world(wst);
+    const [x, y] = worldToScreen(wst[0], wst[1]);
+    if (Math.hypot(x - sx, y - sy) < 28) return { kind: 'ship' };
+  }
+  const p = pickPlanet(sx, sy);
+  if (p != null) return { kind: 'body', i: p };
+  const [x, y] = worldToScreen(0, 0);
+  if (Math.hypot(x - sx, y - sy) < Math.max(30, SUN.radius / worldPerPx() + 10)) return { kind: 'body', i: -1 };
+  return null;
+}
 function pickPlanet(sx, sy) {
   let best = null, bestD = Infinity;
   const k = 1 / worldPerPx();
@@ -427,6 +474,7 @@ canvas.addEventListener('pointermove', (e) => {
     gesture.moved += Math.abs(dx) + Math.abs(dy);
     if (gesture.moved > 4) {
       if (cam.follow) cam.follow = false;
+      cam.track = null;
       toManual();
       const k = worldPerPx();
       cam.x -= dx * k; cam.y += dy * k;
@@ -446,8 +494,8 @@ canvas.addEventListener('pointermove', (e) => {
 });
 const endPointer = (e) => {
   if (e.type === 'pointerup' && tapStart && pointers.size === 1 && (!gesture || gesture.moved <= 6) && performance.now() - tapStart.t < 450) {
-    const hit = pickPlanet(e.clientX, e.clientY);
-    if (hit != null && hit !== sim.body) setTarget(planner.target === hit ? null : hit);
+    const hit = pickFocus(e.clientX, e.clientY);
+    if (hit) focusOn(hit);
   }
   tapStart = null;
   pointers.delete(e.pointerId);
@@ -938,11 +986,11 @@ function frameBody(now) {
     const r = sim.rel(ps);
     sim.heading = Number.isFinite(r[2]) ? Math.atan2(r[3], r[2]) : 0;
   }
-  directWarp(dt, plan, tS);
+  if (!paused) directWarp(dt, plan, tS);
   updateWarpLabel();
 
   // --- physics
-  const simDt = dt * warp;
+  const simDt = paused ? 0 : dt * warp; // paused: game time stands still
   let engineOn = thrust;
   if (armed) {
     if (simDt < tS) handleEvents(sim.step(simDt, 0));
@@ -998,10 +1046,15 @@ function frameBody(now) {
   // --- camera
   sim.world(wst);
   const shipX = sim.alive ? wst[0] : deadAnchor.x, shipY = sim.alive ? wst[1] : deadAnchor.y;
-  if (cam.mode === 'cine') cinematic(dt, shipX, shipY);
+  if (cam.mode === 'cine') { if (!paused) cinematic(dt, shipX, shipY); } // paused: the shot holds still
   else {
     cam.halfH = Math.exp(THREE.MathUtils.lerp(Math.log(cam.halfH), Math.log(cam.target), 1 - Math.exp(-dt * 10)));
-    if (cam.follow) { cam.x = shipX; cam.y = shipY; }
+    if (cam.track) {
+      const [tx, ty] = trackPos(cam.track);
+      const k = Math.exp(-dt * 4);
+      trackOff.x *= k; trackOff.y *= k;
+      cam.x = tx + trackOff.x; cam.y = ty + trackOff.y;
+    } else if (cam.follow) { cam.x = shipX; cam.y = shipY; }
   }
   const aspect = W / H;
   camera.left = -cam.halfH * aspect; camera.right = cam.halfH * aspect;
@@ -1011,8 +1064,7 @@ function frameBody(now) {
   const wpp = worldPerPx();
 
   // --- bodies
-  sun.update(realTime);
-  sun.mesh.scale.setScalar(Math.max(SUN.radius, 6 * wpp) * 5.0);
+  sun.update(realTime, sim.t, Math.max(SUN.radius, 6 * wpp), wpp);
   placeLabel('sun', '', 'Sun', 0, 0, Math.max(SUN.radius / wpp, 6) + 10);
 
   planets.forEach((pl, i) => {
@@ -1263,4 +1315,4 @@ document.getElementById('b-center').classList.add('on');
 requestAnimationFrame(frame);
 
 // debug/test hook
-window.__celeste = { sim, cam, predict: () => pred, keys, held, planner, setTarget, setHold, getWarp: () => warp, nudgeWarp, realTime: () => realTime, particles };
+window.__celeste = { sun, sim, cam, predict: () => pred, keys, held, planner, setTarget, setHold, getWarp: () => warp, nudgeWarp, realTime: () => realTime, particles };

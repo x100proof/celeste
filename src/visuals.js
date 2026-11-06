@@ -57,7 +57,7 @@ export function createBackground() {
         uniform vec2 uRes; uniform vec2 uCam; uniform float uTime;
         varying vec2 vUv;
         void main() {
-          vec2 p = (vUv - 0.5) * uRes / 900.0 + uCam * 0.00012;
+          vec2 p = (vUv - 0.5) * uRes / 900.0; // fixed backdrop: no parallax
           float n1 = fbm(vec3(p * 1.6, uTime * 0.004));
           float n2 = fbm(vec3(p * 3.1 + 7.3, 2.0 + uTime * 0.003));
           float clouds = smoothstep(0.42, 0.9, n1) ;
@@ -96,8 +96,7 @@ export function createBackground() {
       varying vec3 vCol; varying float vMag; varying float vSize;
       void main() {
         vec2 tile = uRes + 64.0;
-        float par = mix(0.02, 0.22, position.z);
-        vec2 p = mod(position.xy * tile - uCam * par, tile) - 32.0;
+        vec2 p = position.xy * tile - 32.0; // one fixed layer: stars are infinitely far away
         vec2 ndc = p / uRes * 2.0 - 1.0;
         gl_Position = vec4(ndc, 0.0, 1.0);
         float tw = 0.75 + 0.25 * sin(uTime * (1.3 + fract(aSeed) * 2.7) + aSeed);
@@ -139,34 +138,92 @@ export function createBackground() {
 
 // ---------------------------------------------------------------- sun
 
-export function createSun(radius) {
+// ---------------------------------------------------------------- the Sun
+//
+// Rotates about its real (IAU) axis with real differential rotation (faster at
+// the equator), scaled to game time (1 year = 600 s, so ~40 s per equatorial
+// turn). Active regions = bipolar sunspot pairs that live for a few rotations;
+// they brighten the corona above them as streamers.
+
+const DAY = 600 / 365.25; // game seconds per day
+/** Sidereal rotation rate (rad per game second) at latitude lat (rad). */
+function sunOmega(lat) {
+  const s2 = Math.sin(lat) ** 2;
+  const degPerDay = 14.713 - 2.396 * s2 - 1.787 * s2 * s2;
+  return (degPerDay * Math.PI) / 180 / DAY;
+}
+const MAX_REGIONS = 12; // solar-maximum-like activity
+
+export function createSun(radius, pole) {
   const EXT = 5.0;
+  const P = new THREE.Vector3(...(pole || [0, 0, 1])).normalize();
+  const E = new THREE.Vector3(0, 0, 1).cross(P).add(new THREE.Vector3(1e-5, 0, 0)).normalize();
+  const N2 = new THREE.Vector3().crossVectors(P, E);
+  // body (non-rotating) -> view
+  const toView = (b) => [b[0] * E.x + b[1] * N2.x + b[2] * P.x, b[0] * E.y + b[1] * N2.y + b[2] * P.y, b[0] * E.z + b[1] * N2.z + b[2] * P.z];
+  const unit = (lat, lon) => [Math.cos(lat) * Math.cos(lon), Math.cos(lat) * Math.sin(lon), Math.sin(lat)];
+
+  const spots = Array.from({ length: MAX_REGIONS * 2 }, () => new THREE.Vector4(0, 0, 0, 0));
+  const streams = Array.from({ length: MAX_REGIONS }, () => new THREE.Vector4(0, 0, 0, 0));
   const mat = new THREE.ShaderMaterial({
-    uniforms: { uExtent: { value: EXT }, uTime: { value: 0 } },
+    uniforms: {
+      uExtent: { value: EXT }, uTime: { value: 0 }, uRot: { value: 0 },
+      uP: { value: P }, uE: { value: E }, uN: { value: N2 },
+      uSpots: { value: spots }, uStreams: { value: streams },
+    },
     vertexShader: QUAD_VERT,
     fragmentShader: NOISE + /* glsl */`
-      uniform float uTime; varying vec2 vQ;
+      uniform float uTime, uRot; uniform vec3 uP, uE, uN;
+      uniform vec4 uSpots[${MAX_REGIONS * 2}];   // body-frame unit dir (xyz), angular radius * strength (w)
+      uniform vec4 uStreams[${MAX_REGIONS}];     // view-space dir of an active region (xyz), strength (w)
+      varying vec2 vQ;
       void main() {
         float r = length(vQ);
         float aa = fwidth(r) * 1.2;
         vec3 col = vec3(0.0); float alpha = 0.0;
-        // corona with slowly churning rays
+        // corona: churning rays plus helmet streamers above active regions
         float ang = atan(vQ.y, vQ.x);
         vec2 dir = vec2(cos(ang), sin(ang));
         float rays = fbm(vec3(dir * 2.2, uTime * 0.05 - r * 0.25));
-        rays = pow(rays, 1.6) * 2.0;
+        rays = pow(rays, 1.6) * 1.6;
+        float stream = 0.0;
+        for (int i = 0; i < ${MAX_REGIONS}; i++) {
+          vec4 st = uStreams[i];
+          if (st.w <= 0.0) continue;
+          vec2 sd = st.xy; float sl = length(sd);
+          if (sl < 1e-3) continue;
+          float c = dot(dir, sd / sl);                       // angular closeness on the sky
+          float lim = sl;                                    // regions near the limb show best
+          stream += st.w * pow(max(c, 0.0), 40.0) * (0.35 + 0.65 * lim);
+        }
         float fall = exp(-(r - 1.0) * 1.35);
         vec3 corona = mix(vec3(1.0, 0.45, 0.12), vec3(0.9, 0.25, 0.55), smoothstep(1.0, 4.0, r));
-        vec3 glow = corona * fall * (0.35 + 0.65 * rays) * 0.75 * smoothstep(5.0, 3.0, r);
-        glow += vec3(1.0, 0.75, 0.4) * exp(-(r - 1.0) * 6.0) * 0.9;
+        vec3 glow = corona * fall * (0.12 + 0.25 * rays + 0.9 * stream * exp(-(r - 1.0) * 0.6)) * 0.45 * smoothstep(5.0, 3.0, r);
+        glow += vec3(1.0, 0.7, 0.35) * exp(-(r - 1.0) * 9.0) * (0.35 + 0.4 * stream);
         if (r < 1.0 + aa) {
           vec3 n = vec3(vQ, sqrt(max(0.0, 1.0 - r * r)));
-          float gran = fbm(n * 7.0 + vec3(0.0, 0.0, uTime * 0.08));
-          float spots = smoothstep(0.62, 0.75, fbm(n * 2.5 + vec3(uTime * 0.01)));
-          vec3 surf = mix(vec3(1.0, 0.55, 0.15), vec3(1.0, 0.95, 0.75), gran);
-          surf *= 1.0 - spots * 0.35;
+          vec3 b = vec3(dot(n, uE), dot(n, uN), dot(n, uP));     // body frame
+          float c = cos(uRot), s = sin(uRot);
+          vec3 g = vec3(c * b.x + s * b.y, -s * b.x + c * b.y, b.z); // co-rotating (granulation)
+          float gran = fbm(g * 9.0 + vec3(0.0, 0.0, uTime * 0.05));
+          vec3 surf = mix(vec3(1.0, 0.42, 0.08), vec3(1.0, 0.8, 0.45), gran);
+          // sunspots: dark umbra, penumbra, bright faculae around them
+          float dark = 0.0, fac = 0.0;
+          for (int i = 0; i < ${MAX_REGIONS * 2}; i++) {
+            vec4 sp = uSpots[i];
+            if (sp.w <= 0.0) continue;
+            float d = acos(clamp(dot(b, sp.xyz), -1.0, 1.0));
+            float rr = sp.w;
+            float pen = 1.0 - smoothstep(rr * 0.75, rr, d + 0.15 * rr * (vnoise(b * 60.0) - 0.5));
+            float umb = 1.0 - smoothstep(rr * 0.3, rr * 0.45, d);
+            dark = max(dark, pen * 0.6 + umb * 0.35);
+            fac = max(fac, (1.0 - smoothstep(rr, rr * 3.0, d)) * (1.0 - pen));
+          }
+          surf *= 1.0 - dark;
+          surf += vec3(0.25, 0.18, 0.08) * fac * (1.0 - n.z * 0.6); // faculae show best near the limb
           float limb = pow(n.z, 0.45);
-          col = surf * (0.55 + 0.75 * limb) * 1.35;
+          // kept below ~0.8 so bloom glows around the disk instead of whiting it out
+          col = surf * (0.3 + 0.4 * limb) * 0.6;
           alpha = 1.0 - smoothstep(1.0 - aa, 1.0 + aa, r);
         }
         gl_FragColor = vec4(col * alpha + glow * (1.0 - alpha), alpha);
@@ -176,7 +233,54 @@ export function createSun(radius) {
   const mesh = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), mat);
   mesh.scale.setScalar(radius * EXT);
   mesh.renderOrder = 5;
-  return { mesh, update(t) { mat.uniforms.uTime.value = t; } };
+
+  // --- active regions (bipolar sunspot pairs)
+  const group = new THREE.Group(); // empty: no field-line overlay
+  const spawn = (t, region) => {
+    // real sunspot belts: 5-31 deg latitude, either hemisphere
+    const hemi = Math.random() < 0.5 ? -1 : 1;
+    const lat = hemi * (0.09 + Math.random() * 0.45);
+    const sep = 0.09 + Math.random() * 0.08;                     // 5-10 deg apart
+    const tilt = hemi * (0.06 + Math.random() * 0.1);            // Joy's law: leader nearer the equator
+    const life = 80 + Math.random() * 140;                       // 2-5 rotations
+    return Object.assign(region || {}, { lat, lon0: Math.random() * Math.PI * 2, sep, tilt, size: 0.03 + Math.random() * 0.04, born: t - (region ? 0 : Math.random() * life), life, seed: Math.random() * 10 });
+  };
+  let lastT = 0;
+  const regions = Array.from({ length: MAX_REGIONS }, () => spawn(0));
+
+  function regionState(rg, t) {
+    const age = (t - rg.born) / rg.life;
+    const strength = age < 0 || age > 1 ? 0 : Math.sin(Math.PI * Math.min(1, Math.max(0, age))) ** 0.6;
+    const lon = rg.lon0 + sunOmega(rg.lat) * t;
+    // leader (ahead in rotation) and follower straddle the centre
+    const latL = rg.lat - rg.tilt / 2, latF = rg.lat + rg.tilt / 2;
+    const L = unit(latL, lon + rg.sep / 2), F = unit(latF, lon - rg.sep / 2);
+    return { strength, L, F };
+  }
+
+  return {
+    mesh, group, debug: () => regions.map((rg) => rg && (({ strength, L }) => ({ strength: +strength.toFixed(2), zView: +toView(L)[2].toFixed(2), latDeg: +(rg.lat * 57.3).toFixed(0) }))(regionState(rg, lastT))),
+    /** t: game time (spin, spots); realT: animation; scale: drawn radius (world); wpp: world per px */
+    update(realT, t, scale, wpp) {
+      lastT = t;
+      mat.uniforms.uTime.value = realT;
+      mat.uniforms.uRot.value = sunOmega(0) * t;
+      mesh.scale.setScalar(scale * EXT);
+      for (let k = 0; k < MAX_REGIONS; k++) {
+        let rg = regions[k];
+        if (rg && t - rg.born > rg.life) rg = regions[k] = spawn(t, rg);
+        if (!rg && Math.random() < 0.002) rg = regions[k] = spawn(t);
+        if (!rg) { spots[2 * k].w = spots[2 * k + 1].w = 0; streams[k].w = 0; continue; }
+        const { strength, L, F } = regionState(rg, t);
+        const rad = rg.size * Math.max(strength, 0.001);
+        spots[2 * k].set(L[0], L[1], L[2], strength > 0.02 ? rad : 0);
+        spots[2 * k + 1].set(F[0], F[1], F[2], strength > 0.02 ? rad * 0.8 : 0);
+        const c = [(L[0] + F[0]) / 2, (L[1] + F[1]) / 2, (L[2] + F[2]) / 2];
+        const cv = toView(c);
+        streams[k].set(cv[0], cv[1], cv[2], strength);
+      }
+    },
+  };
 }
 
 // ---------------------------------------------------------------- planets
@@ -192,11 +296,25 @@ export function createPlanet(p) {
       uColB: { value: new THREE.Vector3(...p.colB) },
       uAtmo: { value: new THREE.Vector3(...p.atmo) },
       uGhost: { value: 0 },
+      uPole: { value: new THREE.Vector3(...(p.pole || [0, 0, 1])) },
+      uTex: { value: null }, uHasTex: { value: 0 },
+      uSpinSign: { value: p.retro ? -1 : 1 },
       uMarker: { value: 0 },
     },
     vertexShader: QUAD_VERT,
     fragmentShader: NOISE + /* glsl */`
-      uniform float uTime, uSpin, uGhost, uMarker; uniform vec2 uSunDir; uniform int uKind;
+      uniform float uTime, uSpin, uGhost, uMarker, uSpinSign; uniform vec2 uSunDir; uniform int uKind;
+      uniform vec3 uPole;
+      uniform sampler2D uTex; uniform float uHasTex;
+      // equirectangular texture lookup from a body-frame direction; picks the
+      // longitude parametrisation without a jump at this pixel, so mipmapping
+      // shows no seam where the image's edges meet (Tarini's trick)
+      vec3 texSphere(vec3 sdir) {
+        float lon = atan(sdir.y, sdir.x), lat = asin(clamp(sdir.z, -1.0, 1.0));
+        float uA = lon / 6.2831853 + 0.5, uB = fract(uA + 0.5) - 0.5;
+        float u = fwidth(uA) <= fwidth(uB) + 1e-5 ? uA : uB;
+        return texture2D(uTex, vec2(u, 0.5 + lat / 3.1415927)).rgb;
+      }
       uniform vec3 uColA, uColB, uAtmo;
       varying vec2 vQ;
       vec3 surface(vec3 s) {
@@ -208,12 +326,17 @@ export function createPlanet(p) {
           float w = fbm(s * 2.0 + vec3(0.0, 0.0, uTime * 0.02));
           float b = sin(s.z * 9.0 + w * 5.0) * 0.5 + 0.5;
           return mix(uColA, uColB, b * 0.7 + w * 0.3);
-        } else if (uKind == 2) { // Earth: oceans, continents, ice, clouds
+        } else if (uKind == 2 && uHasTex > 0.5) { // Earth: NASA Blue Marble + drifting clouds
+          vec3 c = texSphere(s) * 1.1;
+          float cl = smoothstep(0.55, 0.8, fbm(s * 3.2 + vec3(uTime * 0.03, 0.0, 1.0)));
+          return mix(c, vec3(1.0), cl * 0.55);
+        } else if (uKind == 2) { // Earth (until the image loads): procedural oceans, continents, clouds
           float land = fbm(s * 2.3 + 5.0);
           vec3 c = mix(uColA, uColA * 1.6, fbm(s * 6.0));
           float l = smoothstep(0.50, 0.53, land);
           vec3 ground = mix(uColB, vec3(0.45, 0.38, 0.22), smoothstep(0.55, 0.7, land));
           c = mix(c, ground, l);
+          c = mix(c, vec3(0.92, 0.95, 1.0), smoothstep(0.955, 0.97, abs(s.z) + 0.03 * (fbm(s * 8.0) - 0.5))); // ice caps (above ~73 deg)
           float cl = smoothstep(0.5, 0.75, fbm(s * 3.2 + vec3(uTime * 0.03, 0.0, 1.0)));
           return mix(c, vec3(1.0), cl * 0.8);
         } else if (uKind == 4) { // Jupiter: drawn side-on (stripes across the disk), handled in main()
@@ -226,7 +349,7 @@ export function createPlanet(p) {
           float n = fbm(s * 3.0 + 11.0);
           vec3 c = mix(uColA, uColB, smoothstep(0.35, 0.65, n));
           c *= 0.8 + 0.4 * fbm(s * 9.0);
-          return c;
+          return mix(c, vec3(0.95, 0.92, 0.9), smoothstep(0.975, 0.985, abs(s.z) + 0.02 * (fbm(s * 9.0) - 0.5))); // polar caps (above ~78 deg)
         }
       }
       void main() {
@@ -244,25 +367,32 @@ export function createPlanet(p) {
         }
         if (r < 1.0 + aa) {
           vec3 n = vec3(vQ, sqrt(max(0.0, 1.0 - r * r)));
-          float c = cos(uSpin), s = sin(uSpin);
-          vec3 sp = vec3(c * n.x - s * n.y, s * n.x + c * n.y, n.z);
+          // Body frame around the planet's real spin axis (uPole, in view space:
+          // we look down on the ecliptic). sp.z is the sine of latitude; the
+          // surface turns about the axis, counterclockwise seen from the north
+          // pole (prograde) or clockwise for retrograde Venus.
+          vec3 P = normalize(uPole);
+          vec3 E = normalize(cross(vec3(0.0, 0.0, 1.0), P) + vec3(1e-5, 0.0, 0.0));
+          vec3 N2 = cross(P, E);
+          vec3 bq = vec3(dot(n, E), dot(n, N2), dot(n, P));
+          float ang = uSpin * uSpinSign;
+          float c = cos(ang), s = sin(ang);
+          vec3 sp = vec3(c * bq.x + s * bq.y, -s * bq.x + c * bq.y, bq.z);
           vec3 surf = surface(sp);
           if (uKind == 4) {
-            // Jupiter is drawn as if seen from its equator, so it reads as Jupiter:
-            // horizontal belts and zones, turbulent edges, the Great Red Spot,
-            // all rotating about the screen's vertical axis.
-            float ca = cos(uSpin), sa = sin(uSpin);
-            vec3 q = vec3(ca * n.x + sa * n.z, n.y, -sa * n.x + ca * n.z); // rotate about screen-up
-            float w = fbm(vec3(q.x * 3.0, q.y * 14.0, q.z * 3.0) + vec3(0.0, 0.0, uTime * 0.01));
-            float lat = n.y + (w - 0.5) * 0.06;
+            // Jupiter: belts and zones around its (nearly vertical) spin axis,
+            // turbulent edges, and the Great Red Spot at 22 deg south (so it is
+            // only glimpsed near the limb when looking down from the north).
+            float w = fbm(vec3(sp.x * 3.0, sp.y * 3.0, sp.z * 14.0) + vec3(0.0, 0.0, uTime * 0.01));
+            float lat = sp.z + (w - 0.5) * 0.06;
             float belts = sin(lat * 20.0) * 0.5 + 0.5;
             vec3 zone = vec3(0.92, 0.84, 0.70), belt = vec3(0.62, 0.42, 0.28);
             vec3 c = mix(belt, zone, smoothstep(0.3, 0.7, belts));
-            c = mix(c, vec3(0.75, 0.62, 0.48), smoothstep(0.72, 0.95, abs(n.y)));   // duller polar regions
-            c *= 0.88 + 0.24 * fbm(vec3(q.x * 8.0, q.y * 30.0, q.z * 8.0));
-            vec3 spotC = normalize(vec3(0.0, -0.33, 1.0));                          // southern hemisphere
-            vec2 dsp = vec2(atan(q.x, q.z) - atan(spotC.x, spotC.z), (q.y - spotC.y) * 2.2);
-            float spot = (1.0 - smoothstep(0.12, 0.2, length(dsp * vec2(1.0, 1.6)))) * step(0.0, q.z);
+            c = mix(c, vec3(0.75, 0.62, 0.48), smoothstep(0.72, 0.95, abs(sp.z)));   // duller polar regions
+            c *= 0.88 + 0.24 * fbm(vec3(sp.x * 8.0, sp.y * 8.0, sp.z * 30.0));
+            float dlon = atan(sp.y, sp.x);
+            vec2 dsp = vec2(dlon * sqrt(max(0.0, 1.0 - sp.z * sp.z)), (sp.z + 0.375) * 1.6);
+            float spot = 1.0 - smoothstep(0.1, 0.17, length(dsp));
             surf = mix(c, vec3(0.78, 0.36, 0.22), spot * 0.85) * 0.8;
           }
           float diff = max(dot(n, L), 0.0);
@@ -284,18 +414,35 @@ export function createPlanet(p) {
   });
   const mesh = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), mat);
   mesh.renderOrder = 6;
+  if (p.texture) {
+    new THREE.TextureLoader().load(p.texture, (tex) => {
+      tex.wrapS = THREE.RepeatWrapping;
+      tex.anisotropy = 4;
+      mat.uniforms.uTex.value = tex;
+      mat.uniforms.uHasTex.value = 1;
+    });
+  }
 
-  // Rings (Saturn), seen face-on from above: banded annulus, shadowed by the planet.
+  // Rings (Saturn): banded annulus in the tilted equatorial plane, shadowed by the planet.
   let ring = null, ringMat = null;
   if (p.rings) {
     const [r0, r1] = p.rings;
     ringMat = new THREE.ShaderMaterial({
-      uniforms: { uExtent: { value: r1 }, uSunDir: { value: new THREE.Vector2(1, 0) }, uCol: { value: new THREE.Vector3(...p.colB) } },
+      uniforms: { uExtent: { value: r1 }, uSunDir: { value: new THREE.Vector2(1, 0) }, uCol: { value: new THREE.Vector3(...p.colB) }, uPole: { value: new THREE.Vector3(...(p.pole || [0, 0, 1])) } },
       vertexShader: QUAD_VERT,
       fragmentShader: NOISE + /* glsl */`
-        uniform vec2 uSunDir; uniform vec3 uCol; varying vec2 vQ;
+        uniform vec2 uSunDir; uniform vec3 uCol; uniform vec3 uPole; varying vec2 vQ;
         void main() {
-          float r = length(vQ);
+          // The rings lie in the planet's equatorial plane (normal = spin axis):
+          // find the point on that plane under this pixel and use its radius,
+          // so tilted rings appear as an ellipse.
+          vec3 Pn = normalize(uPole);
+          vec3 p3 = vec3(vQ, -(Pn.x * vQ.x + Pn.y * vQ.y) / Pn.z);
+          float r = length(p3);
+          // depth: the rings are drawn after the planet, so hide the parts that
+          // pass BEHIND the globe (closer to the viewer = larger z)
+          float rd2 = dot(vQ, vQ);
+          if (rd2 < 1.0 && p3.z < sqrt(1.0 - rd2)) discard;
           float aa = fwidth(r) * 1.5;
           float inside = smoothstep(${r0.toFixed(2)} - aa, ${r0.toFixed(2)} + aa, r) * (1.0 - smoothstep(${r1.toFixed(2)} - aa, ${r1.toFixed(2)} + aa, r));
           float u = (r - ${r0.toFixed(2)}) / ${(r1 - r0).toFixed(2)};
@@ -303,8 +450,9 @@ export function createPlanet(p) {
           float gap = 1.0 - 0.85 * (1.0 - smoothstep(0.0, 0.025, abs(u - 0.62)));   // a Cassini-like gap
           float dens = inside * bands * gap * mix(0.55, 0.9, smoothstep(0.0, 0.5, u));
           // planet shadow: behind the planet (away from the Sun), within one planet radius of the shadow axis
-          float along = dot(vQ, uSunDir);
-          float side = length(vQ - along * uSunDir);
+          vec3 Ls = vec3(uSunDir, 0.0);
+          float along = dot(p3, Ls);
+          float side = length(p3 - along * Ls);
           float shadow = along < 0.0 ? smoothstep(0.92, 1.08, side) : 1.0;
           vec3 c = uCol * (0.25 + 0.75 * shadow) * 0.9;
           float a = dens * 0.75;
@@ -313,7 +461,7 @@ export function createPlanet(p) {
       ...premult,
     });
     ring = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), ringMat);
-    ring.renderOrder = 5;
+    ring.renderOrder = 7; // after the planet; the shader hides the part behind the globe
   }
 
   return {
