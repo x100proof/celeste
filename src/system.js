@@ -46,7 +46,7 @@ export const PLANETS = [
   planet('Mars', 1.524, 7, 70, 80, { kind: 3, spin: 0.24, texture: 'textures/mars.jpg', pole: iauPole(317.269202, 54.432516), colA: [0.45, 0.16, 0.07], colB: [0.85, 0.42, 0.20], atmo: [1.0, 0.5, 0.35] }),
   // gas giants: reach chosen for GM ~1200 (Jupiter) and ~700 (Saturn) — the heaviest planets
   planet('Jupiter', 5.203, 24, 855, 210, { kind: 4, spin: 0.6, texture: 'textures/jupiter.jpg', pole: iauPole(268.056595, 64.495303), colA: [0.55, 0.36, 0.22], colB: [0.95, 0.86, 0.72], atmo: [1.0, 0.78, 0.55] }),
-  planet('Saturn', 9.537, 20, 1263, 320, { kind: 5, spin: 0.55, pole: iauPole(40.589, 83.537), colA: [0.72, 0.6, 0.4], colB: [0.97, 0.91, 0.74], atmo: [1.0, 0.9, 0.65], rings: [1.3, 2.35] }),
+  planet('Saturn', 9.537, 20, 1263, 320, { kind: 5, spin: 0.55, texture: 'textures/saturn.jpg', pole: iauPole(40.589, 83.537), colA: [0.72, 0.6, 0.4], colB: [0.97, 0.91, 0.74], atmo: [1.0, 0.9, 0.65], rings: [1.3, 2.35] }),
 ];
 
 export const HOME = 2; // Earth

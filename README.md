@@ -111,8 +111,11 @@ Note that the logs include the visitor's IP address and browser user agent.
 - Mars texture: NASA/JPL/USGS Viking MDIM 2.1 colorized mosaic (public domain).
 - Jupiter texture: NASA/JPL/Space Science Institute, Cassini cylindrical map
   PIA07782 (public domain). All via Wikimedia Commons.
-- Venus and Saturn are procedural (NASA's Venus maps show the radar surface
-  under the clouds, not what an observer would see).
+- Saturn texture: "Saturn map" by Askaniy Anpilogov and Björn Jónsson, from
+  Voyager and Cassini imagery, CC BY-SA 3.0, via Wikimedia Commons
+  (textures/saturn.jpg is a resized copy under the same licence).
+- Venus is procedural (NASA's Venus maps show the radar surface under the
+  clouds, not what an observer would see).
 - Planet spin axes: IAU Working Group on Cartographic Coordinates and
   Rotational Elements (north pole right ascension / declination).
 - Rendering: three.js (MIT).
@@ -133,7 +136,7 @@ src/ribbon.js             antialiased glow lines
 src/debug.js              remote debug logging
 src/watchdog-worker.js    freeze watchdog
 vendor/three/             three.js r170 (MIT, see vendor/three/LICENSE)
-textures/                 planet maps from NASA missions (public domain, see Credits)
+textures/                 planet maps from NASA mission imagery (see Credits for licences)
 deploy/                   deploy script and nginx example
 tools/log-server.py       optional debug-log receiver
 ```

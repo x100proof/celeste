@@ -327,6 +327,7 @@ export function createPlanet(p) {
         }
         if (uHasTex > 0.5 && uKind == 3) return texSphere(s) * 0.8;
         if (uHasTex > 0.5 && uKind == 4) return texSphere(s);
+        if (uHasTex > 0.5 && uKind == 5) return texSphere(s) * 0.6; // pale map: keep the lit side from blooming to white
         return surfaceProc(s);
       }
       vec3 surfaceProc(vec3 s) {
