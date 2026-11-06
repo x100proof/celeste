@@ -6,7 +6,8 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { PLANETS, SUN, HOME, planetState, bodyState, bodyOf, THRUST, FINE, TURN_RATE } from './system.js';
 import { Sim } from './nbody.js';
 import { predict } from './predict.js';
-import { Planner, burnArc, bracketAngle } from './planner.js';
+import { burnArc, bracketAngle } from './planner.js';
+import { Autopilot, MODES, MODE_NAMES, FUEL_SCALE, dirOffset } from './autopilot.js';
 import { Ribbon, circlePoints, FEATHER } from './ribbon.js';
 import { createBackground, createSun, createPlanet, createGhostPlanet, createShip, Particles, createShockwave } from './visuals.js';
 
@@ -130,7 +131,8 @@ const bracketTickB = new Ribbon(2, { color: LIME, opacity: 0.95, halfPx: 4, core
 for (const r of [bracketArc, bracketTickA, bracketTickB]) { r.mesh.renderOrder = 8; scene.add(r.mesh); }
 let plannerWorker = null;
 try { plannerWorker = new Worker(new URL('./planner-worker.js', import.meta.url), { type: 'module' }); } catch (e) { plannerWorker = null; }
-const planner = new Planner(plannerWorker);
+const ap = new Autopilot(sim, plannerWorker);
+const planner = ap.planner; // the HUD, guides and camera read plan state from here
 if (plannerWorker) plannerWorker.addEventListener('error', (e) => dbg.record('error', 'planner worker: ' + (e.message || 'error'), { file: e.filename, line: e.lineno }));
 // prograde chevron shown next to the ship while a planned burn is near
 const chevron = new Ribbon(3, { color: LIME, opacity: 1, halfPx: 4.5, corePx: 1.6, glow: 0.5 });
@@ -274,17 +276,65 @@ function recenter() {
   camBlend.phase = '';
   document.getElementById('b-center').classList.add('on');
 }
-function setTarget(t) {
-  dbg.record('event', 'target', { target: t, t: sim.t, body: sim.body });
-  planner.setTarget(t);
+let selMode = 'hohmann';
+function setTarget(t, quiet = false) {
+  dbg.record('event', 'target', { target: t, mode: selMode, t: sim.t, body: sim.body });
+  ap.setTarget(t, selMode);
+  easyBurn = null;
   if (t != null && cam.mode !== 'cine') recenter(); // a new trip gets the cinematic camera back
   updateTargetButtons();
-  if (t != null) toast(`Autopilot: ${PLANETS[t].name}`, 'sit back — burns play in slow motion', 'go');
+  requestEstimates(t);
+  if (quiet) return;
+  if (t != null) toast(`Autopilot: ${PLANETS[t].name}`, `${MODE_NAMES[selMode]} transfer · burns play in slow motion`, 'go');
   else toast('Autopilot off', 'pick a planet to fly there');
+}
+/** Change transfer mode: allowed until the trip's first burn. */
+function setMode(m) {
+  const trip = ap.trip;
+  if (trip && trip.stage !== 'depart' && !(trip.stage === 'torch' && !trip.torch)) {
+    toast('Already under way', 'pick the mode before departure', 'warn');
+    return;
+  }
+  selMode = m;
+  if (trip) {
+    const est = estimates.get(m);
+    ap.setTarget(trip.target, m, est && est.flyby);
+    easyBurn = null;
+    toast(MODE_NAMES[m], est && est.ok ? `estimated fuel ${est.fuel}` : 'planning…', 'go');
+  }
+  updateModeButtons();
+}
+
+// ---- fuel estimates: every mode is flown headlessly in a second worker
+const estimates = new Map(); // mode -> { ok, fuel, time, flyby } | 'pending'
+let estWorker = null, estId = 0;
+function requestEstimates(t) {
+  estimates.clear();
+  if (estWorker) { estWorker.terminate(); estWorker = null; }
+  if (t != null && sim.alive && sim.body >= 0) {
+    try {
+      estWorker = new Worker(new URL('./planner-worker.js', import.meta.url), { type: 'module' });
+      const id = ++estId;
+      estWorker.onmessage = (e) => {
+        const d = e.data;
+        if (d.type !== 'estimate' || d.id !== estId) return;
+        estimates.set(d.mode, d);
+        dbg.record('event', 'estimate', { mode: d.mode, ok: d.ok, fuel: d.fuel, time: d.time, reason: d.reason });
+        updateModeButtons();
+      };
+      const tr = sim.traj, i = tr.head;
+      // the selected mode first, so its number arrives soonest
+      const modes = [selMode, ...MODES.filter((m) => m !== selMode)];
+      for (const m of modes) estimates.set(m, 'pending');
+      estWorker.postMessage({ kind: 'estimate', id, body: sim.body, target: t, modes, simT: sim.t,
+        node: { t: tr.t[i], x: tr.x[i], y: tr.y[i], vx: tr.vx[i], vy: tr.vy[i] } });
+    } catch (e) { dbg.record('warn', 'estimate worker unavailable', e); }
+  }
+  updateModeButtons();
 }
 function cycleTarget() {
   const order = [null, ...PLANETS.keys()].filter((i) => i === null || i !== sim.body);
-  const k = order.indexOf(planner.target);
+  const k = order.indexOf(ap.target);
   setTarget(order[(k + 1) % order.length]);
 }
 
@@ -324,7 +374,7 @@ const targetBtns = PLANETS.map((p, i) => {
   b.innerHTML = `${planetIcon(p, i)}<span class="nm">${p.name}</span>`;
   b.addEventListener('click', () => {
     if (b.disabled) return;
-    setTarget(planner.target === i ? null : i);
+    setTarget(ap.target === i ? null : i);
   });
   targetBar.appendChild(b);
   return b;
@@ -396,12 +446,37 @@ function planetIcon(p, i) {
   return `<span class="orb" style="background: radial-gradient(circle at 35% 30%, ${rgb('colB', 0.85)}, ${rgb('colA', 0.6)} 70%); box-shadow: 0 0 14px ${rgb('atmo', 0.35)}"></span>`;
 }
 
+const FUEL_SVG = '<svg class="fuel" viewBox="0 0 24 24"><path d="M5 21V5a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v16M3.5 21h13M8 7h4v4H8z"/><path d="M15 10h1.5a1.5 1.5 0 0 1 1.5 1.5V17a1.5 1.5 0 0 0 3 0V8.5L18 6"/></svg>';
+const modeBar = document.getElementById('modes');
+const modeBtns = new Map(MODES.map((m) => {
+  const b = document.createElement('button');
+  b.className = 'mode';
+  b.innerHTML = `<span class="mn">${MODE_NAMES[m]}</span><span class="mf">${FUEL_SVG}<b>–</b></span>`;
+  b.addEventListener('click', () => setMode(m));
+  modeBar.appendChild(b);
+  return [m, b];
+}));
+function updateModeButtons() {
+  const trip = ap.trip;
+  modeBar.classList.toggle('hidden', !trip);
+  const locked = !!trip && trip.stage !== 'depart' && !(trip.stage === 'torch' && !trip.torch);
+  for (const [m, b] of modeBtns) {
+    const est = estimates.get(m);
+    b.classList.toggle('on', !!trip && trip.mode === m);
+    b.classList.toggle('locked', locked && trip.mode !== m);
+    const v = b.querySelector('b');
+    if (est === 'pending' || est === undefined) { v.textContent = '…'; b.title = `${MODE_NAMES[m]}: estimating fuel…`; }
+    else if (est.ok) { v.textContent = est.fuel; b.title = `${MODE_NAMES[m]}: fuel ${est.fuel}${est.flyby != null && m === 'assist' ? ` · via ${PLANETS[est.flyby].name}` : ''}`; }
+    else { v.textContent = '✕'; b.title = `${MODE_NAMES[m]}: no route found (${est.reason})`; }
+  }
+}
+
 function updateTargetButtons() {
   targetBtns.forEach((b, i) => {
     const here = sim.alive && sim.body === i && sim.captured;
     b.disabled = here;
     b.classList.toggle('here', here);
-    b.classList.toggle('on', planner.target === i);
+    b.classList.toggle('on', ap.target === i);
   });
 }
 btn('b-pro', () => setHold(hold === 'pro' ? null : 'pro'));
@@ -630,12 +705,23 @@ function updateTargetHud() {
   const p = planner.plan;
   let line;
   switch (planner.status) {
-    case 'planning': line = 'computing transfer…'; break;
+    case 'planning': line = 'computing departure…'; break;
+    case 'aiming': line = ap.trip && ap.trip.mode === 'bielliptic' ? 'planning the far-point burn…' : 'aiming the flyby…'; break;
+    case 'oncourse': {
+      const enc = pred && pred.encounters.find((e) => e.planet === t);
+      line = `on course via ${PLANETS[ap.trip.flyby].name}<br>arrive T-${enc ? fmtTime(enc.t - sim.t) : '?'}`;
+      break;
+    }
+    case 'flyby': line = `swinging past ${PLANETS[ap.trip.flyby].name}…`; break;
+    case 'departing': line = 'climbing out of the gravity well…'; break;
+    case 'torch': line = ap.trip.torch ? `<span class="t">TORCH</span> · arrive T-${fmtTime(ap.torchLeft)}` : `<span class="t">TORCH</span> · launching`; break;
     case 'correcting': line = 'off course · computing<br>a mid-course correction…'; break;
     case 'ready': {
       const tS = p.tMid - p.dur / 2 - sim.t;
       const cap = p.kind === 'capture';
       line = easyBurn ? `<span class="t">BURNING</span> ${fmtCount(p.dur - easyBurn.elapsed)} left`
+        : tS > 0 && p.kind === 'aim'
+          ? `${ap.trip && ap.trip.mode === 'bielliptic' ? 'far-point burn' : 'flyby aim'} <span class="t">${p.dur.toFixed(1)} s</span><br>in <span class="t">${fmtCount(tS)}</span>`
         : tS > 0 && p.kind === 'correct'
           ? `correction <span class="t">${p.dur.toFixed(1)} s${p.thrust < THRUST ? ' fine' : ''}</span> (${p.dv.toFixed(2)} u/s)<br>in <span class="t">${fmtCount(tS)}</span> · then pass ${fmtD(p.ca)} up`
         : tS > 0 ? (cap
@@ -645,7 +731,7 @@ function updateTargetHud() {
       break;
     }
     case 'nogood': line = p && p.kind === 'capture' ? 'pass is too close or too fast<br>for a clean capture'
-      : p && p.kind === 'correct' ? 'no small correction found<br>trying again shortly'
+      : p && (p.kind === 'correct' || p.kind === 'aim') ? 'no good burn found yet<br>trying again shortly'
       : 'no clean transfer this window<br>waiting for the next one'; break;
     case 'orbit': {
       const enc = pred && pred.encounters.find((e) => e.planet === t);
@@ -667,7 +753,7 @@ function updateTargetHud() {
     default: line = '';
   }
   hud.tgt.classList.remove('hidden');
-  hud.tgt.innerHTML = `AUTOPILOT → ${name.toUpperCase()}<br>${line}`;
+  hud.tgt.innerHTML = `AUTOPILOT → ${name.toUpperCase()} · ${MODE_NAMES[ap.trip ? ap.trip.mode : selMode].toUpperCase()}<br>${line}`;
 }
 
 // ------------------------------------------------------------------ game loop
@@ -679,7 +765,13 @@ let emitAcc = 0;
 let deadTimer = 0;
 const deadAnchor = { x: 0, y: 0, vx: 0, vy: 0 };
 let shockAge = 1;
-let cutLatch = false;
+let lastTripFuel = 0;
+const fuelEl = document.getElementById('r-fuel');
+function updateFuel() {
+  const f = ap.trip ? Math.round(ap.fuel * FUEL_SCALE) : lastTripFuel;
+  if (fuelEl._v !== f) { fuelEl.querySelector('b').textContent = f; fuelEl._v = f; }
+  fuelEl.classList.toggle('burning', !!easyBurn || !!(ap.trip && ap.trip.stage === 'torch'));
+}
 let hold = null;        // 'pro' | 'retro' | null — attitude hold
 
 /**
@@ -787,10 +879,15 @@ function directWarp(dt, plan, tS) {
   const profile = (tau, r) => r + (nudge * Math.max(0, tau)) / DIRECTOR_A;
   let target, cap = Infinity;
   const enc = planner.target != null && pred ? pred.encounters.find((e) => e.planet === planner.target) : null;
+  const tr0 = ap.trip;
+  const flybyEnc = tr0 && tr0.flyby != null && !tr0.flybyDone && sim.body !== tr0.flyby && pred
+    ? pred.encounters.find((e) => e.planet === tr0.flyby && e.t > sim.t) : null;
   if (!sim.alive) target = 1;
   else if (easyBurn) target = cap = burnRate(easyBurn.plan);
+  else if (ap.trip && ap.trip.stage === 'torch') target = cap = profile(ap.torchLeft, 1);
   else if (plan && tS > 0) target = cap = profile(tS, burnRate(plan));
-  else if (planner.status === 'planning' || planner.status === 'correcting') target = Math.min(warp, 5);
+  else if (planner.status === 'planning' || planner.status === 'correcting' || planner.status === 'aiming') target = Math.min(warp, 5);
+  else if (flybyEnc) target = cap = profile(flybyEnc.t - sim.t, 2); // slingshot: watch the flyby
   else if (enc && enc.t > sim.t) target = cap = profile(enc.t - sim.t, 2);
   else if (planner.plan && planner.plan.tMid > sim.t) target = cap = profile(planner.plan.tMid - sim.t, 1); // waiting for a window
   else target = Math.min(20, 5 * nudge); // idle
@@ -800,26 +897,6 @@ function directWarp(dt, plan, tS) {
   if (warp > cap) warp = cap;
 }
 
-/** Fly (part of) the planned burn: thrust for at most the remaining duration, then cut. */
-function runEasyBurn(simDt) {
-  // the plan assumes thrust exactly prograde/retrograde relative to its frame body
-  const pl = easyBurn.plan;
-  bodyState(pl.frame, sim.t, ps);
-  sim.heading = Math.atan2(sim.vy - ps[3], sim.vx - ps[2]) + dirOffset(pl);
-  const left = easyBurn.plan.dur - easyBurn.elapsed;
-  const burnDt = Math.min(simDt, Math.max(0, left));
-  handleEvents(sim.step(burnDt, pl.thrust || THRUST));
-  if (simDt > burnDt) handleEvents(sim.step(simDt - burnDt, 0));
-  easyBurn.elapsed += burnDt;
-  if (easyBurn.elapsed >= easyBurn.plan.dur - 1e-9) {
-    easyBurn = null; cutLatch = true;
-    setHold(null); // stop turning once the burn is done
-    dbg.record('event', 'engine cut', { t: sim.t });
-    toast('Engine cut', 'burn complete · check the encounter', 'go');
-  }
-}
-/** Heading offset from (frame-relative) prograde for a plan's burn direction. */
-function dirOffset(pl) { return pl.dir === 'retro' ? Math.PI : pl.dir === 'plan' ? pl.angle : 0; }
 function setHold(m) {
   hold = m;
   document.getElementById('b-pro').classList.toggle('on', m === 'pro');
@@ -832,6 +909,18 @@ let pred = predict(sim);
 
 function handleEvents(events) {
   for (const ev of events) {
+    if (ev.type === 'ignition') {
+      dbg.record('event', 'ignition', { kind: ev.plan.kind, dur: ev.plan.dur, thrust: ev.plan.thrust, t: sim.t });
+      toast('Ignition', `${ev.plan.dur.toFixed(1)} s planned burn`, 'go');
+      updateModeButtons();
+      continue;
+    }
+    if (ev.type === 'cut') {
+      setHold(null);
+      dbg.record('event', 'engine cut', { kind: ev.plan.kind, t: sim.t });
+      toast('Engine cut', ev.plan.kind === 'torch' ? 'torch burn complete · settling into orbit' : 'burn complete', 'go');
+      continue;
+    }
     dbg.record('event', ev.type, { body: ev.body, t: sim.t });
     const name = ev.body >= 0 ? PLANETS[ev.body].name : 'Sun';
     if (ev.type === 'enter') {
@@ -914,7 +1003,8 @@ function debugState() {
     ship: { x: sim.x, y: sim.y, vx: sim.vx, vy: sim.vy, heading: sim.heading, visible: ship.group.visible, screen: [Math.round(sx), Math.round(sy)], onScreen: sx > -50 && sx < W + 50 && sy > -50 && sy < H + 50 },
     cam: { x: cam.x, y: cam.y, halfH: cam.halfH, follow: cam.follow },
     planner: { status: planner.status, target: planner.target, kind: p && p.kind, tStart: p && p.tMid - p.dur / 2, dur: p && p.dur, pending: !!planner.pending },
-    burn: easyBurn ? { kind: easyBurn.plan.kind, elapsed: easyBurn.elapsed } : null, hold, cutLatch,
+    burn: easyBurn ? { kind: easyBurn.plan.kind, elapsed: easyBurn.elapsed } : null, hold,
+    trip: ap.trip && { mode: ap.trip.mode, stage: ap.trip.stage, flyby: ap.trip.flyby, flybyDone: ap.trip.flybyDone }, fuel: Math.round(ap.fuel * FUEL_SCALE),
     traj: { n: sim.traj.length, head: sim.traj.head, endT: sim.traj.endT, crash: sim.traj.crash },
     pred: pred && { segs: pred.segments.map((g) => g.kind[0] + g.body + ':' + g.end), enc: pred.encounter && pred.encounter.planet, fate: pred.fate && pred.fate.kind },
     timing: prevTiming,
@@ -937,44 +1027,28 @@ function frameBody(now) {
   realTime += dt;
 
   // --- autopilot: the player only picks targets; the ship flies itself
-  const accel = THRUST;
-  // a ready plan for the orbit we are in
-  const plan = planner.ready && (planner.ready.kind !== 'depart' || sim.body === planner.ready.from) ? planner.ready : null;
-  const tS = plan ? plan.tMid - plan.dur / 2 - sim.t : Infinity;
-  // The autopilot "holds thrust" from inside the arming window until the burn
-  // is done; arming waits for the exact ignition time and cuts on schedule.
-  const thrustInput = sim.alive && (!!easyBurn || (!!plan && tS > 0 && tS < plan.armWindow));
-  if (!thrustInput) cutLatch = false;
-  // Holding thrust shortly before a planned burn ARMS it: the engine waits,
-  // ignites exactly on the mark, and (below) cuts exactly on time.
-  const armed = !!plan && thrustInput && sim.alive && !cutLatch && !easyBurn && tS > 0 && tS < plan.armWindow;
-  const thrust = thrustInput && sim.alive && !cutLatch && !armed; // engine actually firing this frame
+  const plan = ap.plan;
+  const tS = ap.timeToBurn;
+  const torching = !!ap.trip && ap.trip.stage === 'torch';
+  const armed = !!plan && sim.alive && !easyBurn && tS > 0 && tS < plan.armWindow;
   // Minimal rotation: coast with a fixed attitude; start turning only when the
   // turn will just finish ~1 real second before ignition; track during the burn.
   const planDir = (easyBurn ? easyBurn.plan : plan)?.dir || 'pro';
-  let turnNow = !!easyBurn;
+  let turnNow = !!easyBurn && !torching;
   if (!turnNow && armed) {
-    const bp = plan;
-    bodyState(bp.frame, sim.t, ps);
-    const want = Math.atan2(sim.vy - ps[3], sim.vx - ps[2]) + dirOffset(bp);
+    bodyState(plan.frame, sim.t, ps);
+    const want = Math.atan2(sim.vy - ps[3], sim.vx - ps[2]) + dirOffset(plan);
     const off = Math.abs(((want - sim.heading) % (2 * Math.PI) + 3 * Math.PI) % (2 * Math.PI) - Math.PI);
     turnNow = tS / Math.max(warp, 0.05) < off / TURN_RATE + 1.0;
   }
-  if (turnNow && hold !== planDir) setHold(planDir);
-  if (!turnNow && hold) setHold(null);
+  if (turnNow && !torching && hold !== planDir) setHold(planDir);
+  if ((!turnNow || torching) && hold) setHold(null);
 
-  // prograde / retrograde hold: turn toward the direction of travel (or against it)
+  // turn toward the planned burn direction (the torch steers itself)
   const holdPlan = easyBurn ? easyBurn.plan : plan;
-  if (hold === 'plan' && (!holdPlan || holdPlan.dir !== 'plan' || !(armed || easyBurn))) setHold(null);
-  if (hold && sim.alive) {
-    let want;
-    if (hold === 'plan') {
-      bodyState(holdPlan.frame, sim.t, ps);
-      want = Math.atan2(sim.vy - ps[3], sim.vx - ps[2]) + dirOffset(holdPlan);
-    } else {
-      const r = sim.rel(ps);
-      want = Math.atan2(r[3], r[2]) + (hold === 'retro' ? Math.PI : 0);
-    }
+  if (hold && sim.alive && holdPlan) {
+    bodyState(holdPlan.frame, sim.t, ps);
+    const want = Math.atan2(sim.vy - ps[3], sim.vx - ps[2]) + dirOffset(holdPlan);
     let d = ((want - sim.heading) % (2 * Math.PI) + 3 * Math.PI) % (2 * Math.PI) - Math.PI;
     const stepA = TURN_RATE * dt;
     if (Number.isFinite(want)) sim.heading = Math.abs(d) <= stepA ? want : sim.heading + Math.sign(d) * stepA;
@@ -989,30 +1063,13 @@ function frameBody(now) {
   if (!paused) directWarp(dt, plan, tS);
   updateWarpLabel();
 
-  // --- physics
+  // --- physics (the autopilot ignites and cuts burns exactly on schedule)
   const simDt = paused ? 0 : dt * warp; // paused: game time stands still
-  let engineOn = thrust;
-  if (armed) {
-    if (simDt < tS) handleEvents(sim.step(simDt, 0));
-    else {
-      // ignite exactly at the planned start, partway through this frame
-      handleEvents(sim.step(tS, 0));
-      easyBurn = { plan, elapsed: 0 };
-      dbg.record('event', 'ignition', { kind: plan.kind, dur: plan.dur, thrust: plan.thrust, t: sim.t });
-      toast('Ignition', `${plan.dur.toFixed(1)} s planned burn`, 'go');
-      runEasyBurn(simDt - tS);
-      engineOn = true;
-    }
-  } else if (thrust && plan && !easyBurn && tS > -plan.dur && tS <= 0) {
-    // pressed late: fly the planned duration from now
-    easyBurn = { plan, elapsed: 0 };
-    runEasyBurn(simDt);
-  } else if (thrust && easyBurn) {
-    runEasyBurn(simDt);
-  } else {
-    if (!thrust) easyBurn = null;
-    handleEvents(sim.step(simDt, thrust ? accel : 0));
-  }
+  const step = paused ? { events: [], engineOn: false, accel: 0 } : ap.advance(simDt);
+  handleEvents(step.events);
+  easyBurn = ap.burn;
+  const engineOn = step.engineOn;
+  const thrust = engineOn;
   if (!sim.alive) {
     deadAnchor.x += deadAnchor.vx * simDt; deadAnchor.y += deadAnchor.vy * simDt;
     deadTimer -= dt;
@@ -1026,20 +1083,18 @@ function frameBody(now) {
   lap('physics');
   pred = predict(sim, engineOn);
   lap('predict');
-  // Captured = the orbit we are in holds for the next few laps (no escape, no
-  // impact). Once captured, it lasts while at least the current lap closes.
-  {
-    const f = pred.fate;
-    const was = sim.captured;
-    sim.captured = !!(sim.alive && f && (f.kind === 'holds' || (was && f.laps >= 0.97 && !engineOn) || (was && engineOn)));
-    if (sim.captured && !was && !engineOn) toast('Captured', `stable orbit around ${PLANETS[sim.body].name}`);
-  }
-  planner.update(sim, engineOn || armed, 5, pred, 30 + 3 * warp);
-  if (planner.target != null && planner.status === 'captured') {
-    const name = PLANETS[planner.target].name;
-    dbg.record('event', 'arrived', { target: planner.target, t: sim.t });
-    planner.setTarget(null);
-    toast(`Arrived at ${name}`, 'in orbit · pick the next planet', 'go');
+  // Captured = the orbit holds for the next few laps; plan the next burn.
+  for (const ev of ap.think(pred, 5, 30 + 3 * warp, engineOn)) {
+    if (ev.type === 'captured') toast('Captured', `stable orbit around ${PLANETS[ev.body].name}`);
+    if (ev.type === 'arrived') {
+      const name = PLANETS[ev.body].name;
+      lastTripFuel = Math.round(ap.fuel * FUEL_SCALE);
+      dbg.record('event', 'arrived', { target: ev.body, mode: ap.trip.mode, fuel: lastTripFuel, t: sim.t });
+      ap.setTarget(null);
+      requestEstimates(null);
+      updateTargetButtons();
+      toast(`Arrived at ${name}`, `fuel used ${lastTripFuel} · pick the next planet`, 'go');
+    }
   }
   lap('planner');
 
@@ -1199,7 +1254,7 @@ function frameBody(now) {
   ship.group.position.set(wst[0], wst[1], 1);
   ship.group.rotation.z = sim.heading;
   ship.group.scale.setScalar(shipScale);
-  const firingFine = !!easyBurn && (easyBurn.plan.thrust || THRUST) < THRUST;
+  const firingFine = engineOn && step.accel < 0.3 * THRUST;
   flamePower += ((engineOn ? (firingFine ? 0.35 : 1) : 0) - flamePower) * (1 - Math.exp(-dt * (thrust ? 14 : 9)));
   ship.update(realTime, flamePower, pxPerLocal);
 
@@ -1221,7 +1276,7 @@ function frameBody(now) {
   } else shock.mesh.visible = false;
 
   // --- HUD
-  if (++hudTick % 4 === 0) { updateHud(pred); updateTargetButtons(); }
+  if (++hudTick % 4 === 0) { updateHud(pred); updateTargetButtons(); updateFuel(); }
   sweepLabels();
 
   lap('scene');
@@ -1279,7 +1334,7 @@ function drawGuides(wpp) {
     const armedNow = !easyBurn && tS > 0 && tS < p.armWindow;
     const txt = easyBurn ? `BURNING · ${fmtCount(p.dur - easyBurn.elapsed)} left`
       : armedNow ? `${p.kind === 'capture' ? 'CAPTURE' : p.kind === 'correct' ? 'CORRECTION' : 'DEPARTURE'} · ignition in ${fmtCount(tS)}`
-      : tS > 0 ? `${p.kind === 'capture' ? 'CAPTURE' : p.kind === 'correct' ? 'CORRECTION' : 'BURN'} ${p.dur.toFixed(1)} s${(p.thrust || THRUST) < THRUST ? ' fine' : ''} · T-${fmtCount(tS)}` : 'BURN NOW';
+      : tS > 0 ? `${p.kind === 'capture' ? 'CAPTURE' : p.kind === 'correct' ? 'CORRECTION' : p.kind === 'aim' ? (ap.trip && ap.trip.mode === 'bielliptic' ? 'FAR-POINT BURN' : 'FLYBY AIM') : 'BURN'} ${p.dur.toFixed(1)} s${(p.thrust || THRUST) < THRUST ? ' fine' : ''} · T-${fmtCount(tS)}` : 'BURN NOW';
     placeLabel('burn', 'burn', txt, pts[0], pts[1], 12);
     tint('burn', css, k);
   }
@@ -1315,4 +1370,4 @@ document.getElementById('b-center').classList.add('on');
 requestAnimationFrame(frame);
 
 // debug/test hook
-window.__celeste = { sun, sim, cam, predict: () => pred, keys, held, planner, setTarget, setHold, getWarp: () => warp, nudgeWarp, realTime: () => realTime, particles };
+window.__celeste = { sun, sim, cam, ap, predict: () => pred, keys, held, planner, setTarget, setMode, estimates, setHold, getWarp: () => warp, nudgeWarp, realTime: () => realTime, particles };

@@ -17,6 +17,21 @@ It is named after the orbital-mechanics game in Vernor Vinge's *The Peace War*.
   and a time director that speeds through coasts but plays every burn in slow
   motion. No wait before a burn is longer than about 30 seconds.
 
+## Transfer types
+
+After picking a planet, choose how to get there. Each button shows the fuel
+that transfer would use (measured by flying it headlessly in the background,
+not from a formula); the panel shows fuel used live as the trip happens.
+Fuel is total thrust delivered (delta-v), shown as a plain number.
+
+| Type | What it does |
+| --- | --- |
+| Hohmann | The textbook cheapest two-burn transfer: half an ellipse touching both orbits, launched only when the planets line up (may mean waiting). |
+| Go now | Leave immediately, whatever the alignment: the planner finds a path that meets the target where it will be (Lambert-style shooting). |
+| Bi-elliptic | Overshoot to a far point well beyond both orbits, burn there, then fall to the target. Long, and cheaper than Hohmann only for very different orbit sizes. |
+| Slingshot | Swing past another planet first and borrow its orbital speed (a real gravity assist, since the physics is full n-body). |
+| Torch | Thrust the whole way with closed-loop guidance, routing around the Sun, then spiral down into orbit. Fast and very expensive. |
+
 ## Controls
 
 | Input | Action |
@@ -38,9 +53,13 @@ It is named after the orbital-mechanics game in Vernor Vinge's *The Peace War*.
 - **Prediction** (`src/predict.js`): extends the cached path many laps ahead,
   finds encounters, and decides whether an orbit "holds" (captured) by checking
   that it survives three more laps.
-- **Planning** (`src/planner.js`, run in a Web Worker): departure windows and
-  burns from a textbook Hohmann estimate refined by shooting with the real
-  integrator, mid-course corrections, and capture burns.
+- **Planning** (`src/planner.js`, run in a Web Worker): departure burns for each
+  transfer type (textbook estimate refined by shooting with the real
+  integrator), far-point and flyby-aiming burns, mid-course corrections,
+  capture and rescue burns.
+- **Autopilot** (`src/autopilot.js`): flies a whole trip (burns ignite and cut
+  exactly on schedule; torch guidance), shared by the live game and the
+  headless dry runs that produce the fuel estimates.
 - **Rendering**: [three.js](https://threejs.org) with custom shaders for the Sun,
   planets, Saturn's rings, antialiased glow lines and bloom. No build step:
   plain ES modules and a vendored copy of three.js.
@@ -127,7 +146,8 @@ index.html, style.css     page, HUD
 src/main.js               game loop, autopilot, time director, cinematic camera, HUD
 src/nbody.js              n-body integrator, trajectory cache, ship simulation
 src/predict.js            path prediction, encounters, orbit fate
-src/planner.js            departure / correction / capture planning
+src/autopilot.js          trip flying, torch guidance, fuel, headless dry runs
+src/planner.js            departure / aim / correction / capture planning
 src/planner-worker.js     runs planning off the main thread
 src/physics.js            two-body (Kepler) helpers
 src/system.js             the Sun and planets
