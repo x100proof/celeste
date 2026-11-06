@@ -37,7 +37,8 @@ self.onmessage = (e) => {
     }
     return;
   }
-  const { id, kind, lead, simT, trip, body, version, node } = m;
+  const { id, kind, simT, trip, body, version, node } = m;
+  let { lead } = m;
   const sim = new Sim();
   sim.t = node.t; sim.x = node.x; sim.y = node.y; sim.vx = node.vx; sim.vy = node.vy;
   sim.body = body; sim.captured = true;

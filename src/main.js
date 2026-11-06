@@ -6,6 +6,7 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { PLANETS, SUN, HOME, planetState, bodyState, bodyOf, THRUST, FINE, TURN_RATE } from './system.js';
 import { Sim } from './nbody.js';
 import { predict } from './predict.js';
+import { fmtDate, fmtSpan, realDate } from './calendar.js';
 import { burnArc, bracketAngle } from './planner.js';
 import { Autopilot, MODES, MODE_NAMES, FUEL_SCALE, dirOffset } from './autopilot.js';
 import { Ribbon, circlePoints, FEATHER } from './ribbon.js';
@@ -281,6 +282,7 @@ function setTarget(t, quiet = false) {
   dbg.record('event', 'target', { target: t, mode: selMode, t: sim.t, body: sim.body });
   ap.setTarget(t, selMode);
   easyBurn = null;
+  tripStartT = tripEndT = null;
   if (t != null && cam.mode !== 'cine') recenter(); // a new trip gets the cinematic camera back
   updateTargetButtons();
   requestEstimates(t);
@@ -588,7 +590,7 @@ addEventListener('gesturestart', (e) => e.preventDefault());
 // ------------------------------------------------------------------ HUD
 
 const $ = (id) => document.getElementById(id);
-const hud = { frame: $('r-frame'), status: $('r-status'), tgt: $('r-target'), clock: $('clock') };
+const hud = { frame: $('r-frame'), status: $('r-status'), tgt: $('r-target'), clock: $('clock'), trip: $('r-trip') };
 const toastEl = $('toast');
 let toastTimer = 0;
 function toast(big, small = '', cls = '') {
@@ -610,7 +612,11 @@ const fmtD = (d) => (!isFinite(d) ? '—' : Math.abs(d) >= 1000 ? d.toFixed(0) +
 
 let hudTick = 0;
 function updateHud(pred) {
-  hud.clock.textContent = 'T+ ' + fmtTime(sim.t);
+  hud.clock.textContent = fmtDate(sim.t);
+  // trip length: running from the first ignition, then the last trip's total
+  const tripT = tripStartT != null ? (ap.trip ? sim.t : tripEndT) - tripStartT : null;
+  const tt = tripT != null ? fmtSpan(tripT) : '–';
+  if (hud.trip._v !== tt) { hud.trip.textContent = tt; hud.trip._v = tt; }
   updateTargetHud();
   if (!sim.alive) { hud.status.textContent = 'Lost'; hud.status.className = ''; return; }
   const body = bodyOf(sim.body);
@@ -773,6 +779,8 @@ let deadTimer = 0;
 const deadAnchor = { x: 0, y: 0, vx: 0, vy: 0 };
 let shockAge = 1;
 let lastTripFuel = 0;
+// the trip clock: from the trip's first ignition to arrival (game seconds)
+let tripStartT = null, tripEndT = null;
 const fuelEl = document.getElementById('r-fuel');
 function updateFuel() {
   const f = ap.trip ? Math.round(ap.fuel * FUEL_SCALE) : lastTripFuel;
@@ -923,6 +931,7 @@ let pred = predict(sim);
 function handleEvents(events) {
   for (const ev of events) {
     if (ev.type === 'ignition') {
+      if (tripStartT == null && ap.trip) tripStartT = sim.t;
       dbg.record('event', 'ignition', { kind: ev.plan.kind, dur: ev.plan.dur, thrust: ev.plan.thrust, t: sim.t });
       toast('Ignition', ev.plan.kind === 'brach' ? 'full thrust · flip halfway' : `${ev.plan.dur.toFixed(1)} s planned burn`, 'go');
       updateModeButtons();
@@ -1107,11 +1116,13 @@ function frameBody(now) {
     if (ev.type === 'arrived') {
       const name = PLANETS[ev.body].name;
       lastTripFuel = Math.round(ap.fuel * FUEL_SCALE);
-      dbg.record('event', 'arrived', { target: ev.body, mode: ap.trip.mode, fuel: lastTripFuel, t: sim.t });
+      tripEndT = sim.t;
+      const took = tripStartT != null ? fmtSpan(tripEndT - tripStartT) : null;
+      dbg.record('event', 'arrived', { target: ev.body, mode: ap.trip.mode, fuel: lastTripFuel, t: sim.t, took, date: realDate(sim.t).toISOString() });
       ap.setTarget(null);
       requestEstimates(null);
       updateTargetButtons();
-      toast(`Arrived at ${name}`, `fuel used ${lastTripFuel} · pick the next planet`, 'go');
+      toast(`Arrived at ${name}`, `${took ? `trip took <span class="span">${took}</span> · ` : ''}fuel used ${lastTripFuel} · pick the next planet`, 'go');
     }
   }
   lap('planner');
@@ -1401,4 +1412,4 @@ document.getElementById('b-center').classList.add('on');
 requestAnimationFrame(frame);
 
 // debug/test hook
-window.__celeste = { sun, sim, cam, ap, predict: () => pred, keys, held, planner, setTarget, setMode, estimates, setHold, getWarp: () => warp, nudgeWarp, realTime: () => realTime, particles };
+window.__celeste = { sun, sim, cam, ap, date: () => realDate(sim.t), predict: () => pred, keys, held, planner, setTarget, setMode, estimates, setHold, getWarp: () => warp, nudgeWarp, realTime: () => realTime, particles };
