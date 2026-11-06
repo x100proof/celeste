@@ -458,14 +458,14 @@ const modeBtns = new Map(MODES.map((m) => {
 }));
 function updateModeButtons() {
   const trip = ap.trip;
-  modeBar.classList.toggle('hidden', !trip);
   const locked = !!trip && trip.stage !== 'depart' && !(trip.stage === 'torch' && !trip.torch);
   for (const [m, b] of modeBtns) {
     const est = estimates.get(m);
-    b.classList.toggle('on', !!trip && trip.mode === m);
+    b.classList.toggle('on', (trip ? trip.mode : selMode) === m); // always shown; selected mode lit
     b.classList.toggle('locked', locked && trip.mode !== m);
     const v = b.querySelector('b');
-    if (est === 'pending' || est === undefined) { v.textContent = '…'; b.title = `${MODE_NAMES[m]}: estimating fuel…`; }
+    if (est === undefined) { v.textContent = '–'; b.title = `${MODE_NAMES[m]}: pick a planet to see the fuel`; }
+    else if (est === 'pending') { v.textContent = '…'; b.title = `${MODE_NAMES[m]}: estimating fuel…`; }
     else if (est.ok) { v.textContent = est.fuel; b.title = `${MODE_NAMES[m]}: fuel ${est.fuel}${est.flyby != null && m === 'assist' ? ` · via ${PLANETS[est.flyby].name}` : ''}`; }
     else { v.textContent = '✕'; b.title = `${MODE_NAMES[m]}: no route found (${est.reason})`; }
   }
