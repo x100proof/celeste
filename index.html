@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#04030a">
+<title>Celeste</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22%3E%3Crect width=%2232%22 height=%2232%22 rx=%227%22 fill=%22%2304030a%22/%3E%3Cellipse cx=%2216%22 cy=%2216%22 rx=%2212%22 ry=%227%22 fill=%22none%22 stroke=%22%236ef3ff%22 stroke-width=%221.6%22 transform=%22rotate(-25 16 16)%22/%3E%3Ccircle cx=%2216%22 cy=%2216%22 r=%223.2%22 fill=%22%23ffc25a%22/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<script type="importmap">
+{ "imports": { "three": "./vendor/three/three.module.js", "three/addons/": "./vendor/three/addons/" } }
+</script>
+</head>
+<body>
+<canvas id="view"></canvas>
+<div id="labels"></div>
+
+<nav id="targets" aria-label="Fly to a planet"></nav>
+<section id="readout" class="panel">
+  <header><span class="logo">CELESTE</span><span id="clock">T+ 00:00</span></header>
+  <div class="row"><span>Frame</span><b id="r-frame">Earth</b></div>
+  <div class="row"><span>Status</span><b id="r-status">Orbit</b></div>
+  <div class="row"><span id="l-alt">Altitude</span><b id="r-alt">–</b></div>
+  <div class="row"><span>Speed</span><b id="r-vel">–</b></div>
+  <div class="row"><span>Apoapsis</span><b id="r-ap">–</b></div>
+  <div class="row"><span>Periapsis</span><b id="r-pe">–</b></div>
+  <div class="row"><span>Period</span><b id="r-per">–</b></div>
+  <div id="r-target" class="enc target hidden"></div>
+  <div id="r-helio" class="enc helio hidden"></div>
+  <div id="r-enc" class="enc hidden"></div>
+</section>
+
+<nav id="tools">
+  <button class="btn" id="b-zin" title="Zoom in (+)" aria-label="Zoom in">
+    <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
+  <button class="btn" id="b-zout" title="Zoom out (−)" aria-label="Zoom out">
+    <svg viewBox="0 0 24 24"><path d="M5 12h14"/></svg></button>
+  <button class="btn" id="b-center" title="Cinematic camera (C) — lit when on; pan/zoom turns it off" aria-label="Cinematic camera">
+    <svg viewBox="0 0 24 24"><rect x="3" y="7" width="12" height="10" rx="2"/><path d="M15 10.5l5-3v9l-5-3z"/><circle cx="7" cy="5" r="1.6"/><circle cx="11.5" cy="5" r="1.6"/></svg></button>
+  <button class="btn toggle" id="b-ghost" title="Ghost planets: where planets will be when you get there (G)" aria-label="Toggle ghost planets">
+    <svg viewBox="0 0 24 24"><circle cx="9" cy="13" r="5"/><circle cx="15.5" cy="9.5" r="5" stroke-dasharray="2.2 2.2" opacity="0.6"/></svg></button>
+  <div class="holds">
+    <button class="btn sm toggle" id="b-pro" title="Hold prograde (P)" aria-label="Hold prograde">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4.5"/><path d="M12 2.5v5M4 15.5l4.2-1.8M20 15.5l-4.2-1.8"/></svg></button>
+    <button class="btn sm toggle" id="b-retro" title="Hold retrograde (R)" aria-label="Hold retrograde">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="5.5"/><path d="M8.6 8.6l6.8 6.8M15.4 8.6l-6.8 6.8M12 17.5v4"/></svg></button>
+  </div>
+  <div class="warp">
+    <button class="btn sm" id="b-wdown" title="Nudge time slower (,)" aria-label="Slower time">
+      <svg viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg></button>
+    <span id="warp">1×</span>
+    <button class="btn sm" id="b-wup" title="Nudge time faster (.)" aria-label="Faster time">
+      <svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></button>
+  </div>
+</nav>
+
+<div id="toast"></div>
+<div id="hint">click a planet (top left) to fly there · <b>,</b> <b>.</b> nudge time · <b>G</b> ghosts · <b>C</b> cinematic camera · drag to pan · scroll to zoom</div>
+
+<div id="touch">
+  <div class="pad left">
+    <button class="tbtn" id="t-left" aria-label="Rotate left">
+      <svg viewBox="0 0 24 24"><path d="M5 13a7 7 0 1 0 3-5.7"/><path d="M8 3v4.5h4.5"/></svg></button>
+    <button class="tbtn" id="t-right" aria-label="Rotate right">
+      <svg viewBox="0 0 24 24"><path d="M19 13a7 7 0 1 1-3-5.7"/><path d="M16 3v4.5h-4.5"/></svg></button>
+  </div>
+  <div class="pad right">
+    <button class="tbtn fine" id="t-fine" aria-label="Fine thrust toggle">FINE</button>
+    <button class="tbtn thrust" id="t-thrust" aria-label="Thrust">THRUST</button>
+  </div>
+</div>
+
+<script type="module" src="src/main.js"></script>
+</body>
+</html>
