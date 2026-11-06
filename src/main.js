@@ -332,6 +332,18 @@ function planetIcon(p, i) {
         <path d="M5 16 q6 -3 11 0 M18 23 q6 -3 13 1 M8 28 q5 -2 9 0 M24 12 q4 -2 9 1" fill="none" stroke="#fff" stroke-width="1.5" stroke-linecap="round" opacity="0.75"/>
       </g>${shade()}</svg>`;
   }
+  if (p.name === 'Mars') {
+    return `<svg class="orb svg" viewBox="0 0 40 40"><defs>${disk()}
+      <radialGradient id="pm${i}" cx="40%" cy="35%" r="70%"><stop offset="0" stop-color="#e0824f"/><stop offset="1" stop-color="#9a3d1f"/></radialGradient></defs>
+      <circle cx="20" cy="20" r="15" fill="#f0a070" opacity="0.18"/>
+      <circle cx="20" cy="20" r="14" fill="url(#pm${i})"/><g clip-path="url(#pc${i})">
+        <path d="M8 19 q4 -3 8 -1 q3 2 6 0 q3 -2 6 1 q-2 3 -6 3 q-4 -1 -7 1 q-4 1 -7 -4z" fill="#6e2a14" opacity="0.55"/>
+        <path d="M14 26 q4 -1 7 1 q-2 3 -6 2z" fill="#6e2a14" opacity="0.45"/>
+        <path d="M11 16.5 q7 1 15 -1" fill="none" stroke="#5a2210" stroke-width="1.1" opacity="0.6"/>
+        <ellipse cx="20" cy="6.8" rx="6" ry="2" fill="#f6efe8" opacity="0.95"/>
+        <ellipse cx="20" cy="33.6" rx="4.5" ry="1.5" fill="#f6efe8" opacity="0.7"/>
+      </g>${shade()}</svg>`;
+  }
   if (p.name === 'Jupiter') {
     const bands = [[9, 2.2, '#b07a52'], [14, 3.2, '#9c6844'], [19.5, 1.6, '#c99a70'], [23, 3.4, '#a06a45'], [28, 2.2, '#b9875f']]
       .map(([y, h, col]) => `<rect x="0" y="${y}" width="40" height="${h}" fill="${col}" opacity="0.75"/>`).join('');
