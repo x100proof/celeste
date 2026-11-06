@@ -7,7 +7,7 @@ import { PLANETS, SUN, HOME, planetState, bodyState, bodyOf, THRUST, FINE, TURN_
 import { Sim } from './nbody.js';
 import { predict } from './predict.js';
 import { Planner, burnArc, bracketAngle } from './planner.js';
-import { Ribbon, circlePoints } from './ribbon.js';
+import { Ribbon, circlePoints, FEATHER } from './ribbon.js';
 import { createBackground, createSun, createPlanet, createGhostPlanet, createShip, Particles, createShockwave } from './visuals.js';
 
 import * as dbg from './debug.js';
@@ -27,7 +27,12 @@ const scene = new THREE.Scene();
 const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, -100, 100);
 const bg = createBackground();
 
-let W = innerWidth, H = innerHeight, DPR = Math.min(devicePixelRatio || 1, 2);
+// Render at the screen's full pixel density (up to 3x) so high-DPI phones are
+// sharp; an adaptive cap (dprCap) steps the resolution down if the frame rate
+// suffers and back up when there is headroom.
+const DPR_MAX = Math.min(devicePixelRatio || 1, 3);
+let dprCap = DPR_MAX;
+let W = innerWidth, H = innerHeight, DPR = DPR_MAX;
 const rt = new THREE.WebGLRenderTarget(W * DPR, H * DPR, { type: THREE.HalfFloatType, samples: 4 });
 const composer = new EffectComposer(renderer, rt);
 const bgPass = new RenderPass(bg.scene, bg.cam);
@@ -39,7 +44,8 @@ composer.addPass(mainPass);
 composer.addPass(bloom);
 
 function resize() {
-  W = innerWidth; H = innerHeight; DPR = Math.min(devicePixelRatio || 1, 2);
+  W = innerWidth; H = innerHeight; DPR = Math.min(devicePixelRatio || 1, 3, dprCap);
+  FEATHER.value = 1 / DPR;
   renderer.setPixelRatio(DPR);
   renderer.setSize(W, H, false);
   composer.setPixelRatio(DPR);
@@ -808,7 +814,10 @@ function debugTick(rawDtMs, workMs) {
   dbg.beat();
   frameCount++; fpsFrames++;
   const t = performance.now();
-  if (t - fpsAt > 1000) { fps = Math.round((fpsFrames * 1000) / (t - fpsAt)); fpsFrames = 0; fpsAt = t; }
+  if (t - fpsAt > 1000) {
+    fps = Math.round((fpsFrames * 1000) / (t - fpsAt)); fpsFrames = 0; fpsAt = t;
+    adaptResolution(fps);
+  }
   if (rawDtMs > 1000 && frameCount > 5 && !document.hidden) dbg.record('stall', `frame gap ${Math.round(rawDtMs)} ms`, { prevFrameTiming: prevTiming });
   if (workMs > 200) dbg.record('anomaly', `slow frame ${Math.round(workMs)} ms`, { timing: { ...timing } });
   prevTiming = { ...timing, workMs: Math.round(workMs) };
@@ -822,11 +831,26 @@ function debugTick(rawDtMs, workMs) {
   if (t - lastSnapAt > 500) { lastSnapAt = t; dbg.snapshot(debugState()); }
 }
 
+// Adaptive resolution: after a few slow seconds drop the pixel ratio a step;
+// after sustained headroom raise it again (never above the screen's own).
+let slowSecs = 0, fastSecs = 0;
+function adaptResolution(f) {
+  if (document.hidden || performance.now() < 4000) return; // let loading settle first
+  if (f < 45) { slowSecs++; fastSecs = 0; } else if (f >= 58) { fastSecs++; slowSecs = 0; } else { slowSecs = fastSecs = 0; }
+  if (slowSecs >= 3 && dprCap > 1) {
+    dprCap = Math.max(1, +(Math.min(dprCap, DPR) - 0.5).toFixed(2)); slowSecs = 0;
+    dbg.record('event', 'resolution down', { dprCap, fps: f }); resize();
+  } else if (fastSecs >= 8 && dprCap < DPR_MAX) {
+    dprCap = Math.min(DPR_MAX, dprCap + 0.5); fastSecs = 0;
+    dbg.record('event', 'resolution up', { dprCap, fps: f }); resize();
+  }
+}
+
 function debugState() {
   const [sx, sy] = worldToScreen(sim.x, sim.y);
   const p = planner.plan;
   return {
-    t: sim.t, warp, fps, alive: sim.alive, body: sim.body, captured: sim.captured, version: sim.version,
+    t: sim.t, warp, fps, dpr: DPR, alive: sim.alive, body: sim.body, captured: sim.captured, version: sim.version,
     ship: { x: sim.x, y: sim.y, vx: sim.vx, vy: sim.vy, heading: sim.heading, visible: ship.group.visible, screen: [Math.round(sx), Math.round(sy)], onScreen: sx > -50 && sx < W + 50 && sy > -50 && sy < H + 50 },
     cam: { x: cam.x, y: cam.y, halfH: cam.halfH, follow: cam.follow },
     planner: { status: planner.status, target: planner.target, kind: p && p.kind, tStart: p && p.tMid - p.dur / 2, dur: p && p.dur, pending: !!planner.pending },

@@ -5,6 +5,9 @@
 
 import * as THREE from 'three';
 
+/** Edge softening width in CSS px, shared by all ribbons: 1 device pixel (= 1 / devicePixelRatio). */
+export const FEATHER = { value: 1 };
+
 const vert = /* glsl */`
   attribute vec2 aNormal;
   attribute float aSide;
@@ -32,6 +35,7 @@ const frag = /* glsl */`
   uniform float uDash;     // dash period in px (0 = solid)
   uniform float uDuty;
   uniform float uDashOffset;
+  uniform float uFeather;
   uniform float uLen;      // total length (world); with uFade > 0 the last uFade of it fades out
   uniform float uFade;
   varying float vSide;
@@ -39,9 +43,9 @@ const frag = /* glsl */`
   varying float vAlongW;
   void main() {
     float d = abs(vSide) * uHalfPx;
-    float core = 1.0 - smoothstep(uCorePx - 0.6, uCorePx + 0.6, d);
+    float core = 1.0 - smoothstep(uCorePx - 0.6 * uFeather, uCorePx + 0.6 * uFeather, d);
     float g = exp(-3.0 * (d * d) / (uHalfPx * uHalfPx)) * uGlow;
-    float edge = 1.0 - smoothstep(uHalfPx - 1.0, uHalfPx, d);
+    float edge = 1.0 - smoothstep(uHalfPx - uFeather, uHalfPx, d);
     float a = (core + g) * edge;
     if (uDash > 0.0) {
       float ph = fract((vAlongPx - uDashOffset) / uDash);
@@ -87,6 +91,7 @@ export class Ribbon {
       uDuty: { value: duty },
       uDashOffset: { value: 0 },
       uWorldPerPx: { value: 1 },
+      uFeather: FEATHER,
       uLen: { value: 1 },
       uFade: { value: 0 },
     };
