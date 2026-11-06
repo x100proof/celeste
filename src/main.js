@@ -1366,6 +1366,7 @@ function drawGuides(wpp) {
 updateWarpLabel();
 updateHud(pred);
 updateTargetButtons();
+updateModeButtons();
 document.getElementById('b-center').classList.add('on');
 requestAnimationFrame(frame);
 
