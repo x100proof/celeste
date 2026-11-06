@@ -299,12 +299,14 @@ export function createPlanet(p) {
       uPole: { value: new THREE.Vector3(...(p.pole || [0, 0, 1])) },
       uTex: { value: null }, uHasTex: { value: 0 },
       uSpinSign: { value: p.retro ? -1 : 1 },
+      uSpinArc: { value: 0 },
       uMarker: { value: 0 },
     },
     vertexShader: QUAD_VERT,
     fragmentShader: NOISE + /* glsl */`
       uniform float uTime, uSpin, uGhost, uMarker, uSpinSign; uniform vec2 uSunDir; uniform int uKind;
       uniform vec3 uPole;
+      uniform float uSpinArc; // rotation during this frame (rad): motion blur
       uniform sampler2D uTex; uniform float uHasTex;
       // equirectangular texture lookup from a body-frame direction; picks the
       // longitude parametrisation without a jump at this pixel, so mipmapping
@@ -391,7 +393,20 @@ export function createPlanet(p) {
           float ang = uSpin * uSpinSign;
           float c = cos(ang), s = sin(ang);
           vec3 sp = vec3(c * bq.x + s * bq.y, -s * bq.x + c * bq.y, bq.z);
-          vec3 surf = surface(sp);
+          // Motion blur: average the surface over the angle turned this frame,
+          // so fast real spin rates (Earth, Jupiter at high warp) smear into
+          // bands instead of flickering.
+          int nb = int(clamp(uSpinArc / 0.04, 1.0, 24.0));
+          vec3 surf = vec3(0.0);
+          // per-pixel jitter (interleaved gradient noise) turns sampling steps into fine grain
+          float jit = nb > 1 ? fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715)))) : 0.0;
+          for (int k = 0; k < 24; k++) {
+            if (k >= nb) break;
+            float a2 = ang - uSpinSign * min(uSpinArc, 6.2831853) * ((float(k) + jit) / float(nb));
+            float c2 = cos(a2), s2 = sin(a2);
+            surf += surface(vec3(c2 * bq.x + s2 * bq.y, -s2 * bq.x + c2 * bq.y, bq.z));
+          }
+          surf /= float(nb);
           if (uKind == 4 && uHasTex < 0.5) {
             // Jupiter (until its map loads): belts and zones around its (nearly vertical) spin axis,
             // turbulent edges, and the Great Red Spot at 22 deg south (so it is
@@ -479,7 +494,8 @@ export function createPlanet(p) {
 
   return {
     mesh, mat, ring,
-    update(x, y, scale, sunDirX, sunDirY, t, marker) {
+    /** arc: game seconds simulated this frame (for motion blur) */
+    update(x, y, scale, sunDirX, sunDirY, t, marker, frameDt = 0) {
       mesh.position.set(x, y, 0);
       mesh.scale.setScalar(scale * EXT);
       if (ring) {
@@ -490,7 +506,8 @@ export function createPlanet(p) {
       }
       mat.uniforms.uSunDir.value.set(sunDirX, sunDirY);
       mat.uniforms.uTime.value = t;
-      mat.uniforms.uSpin.value = t * p.spin;
+      mat.uniforms.uSpin.value = (t * p.spin) % (2 * Math.PI); // wrapped in double precision
+      mat.uniforms.uSpinArc.value = Math.abs(p.spin * frameDt);
       mat.uniforms.uMarker.value = marker;
     },
   };

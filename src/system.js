@@ -34,19 +34,21 @@ function planet(name, aAU, radius, reach, phaseDeg, look) {
     phase0: (phaseDeg * Math.PI) / 180,
     w: TAU / period,
     ...look,
+    // real sidereal rotation, in game time (rad per game second; sign via retro)
+    spin: (2 * Math.PI) / (look.rotDays * (YEAR / 365.25)),
   };
 }
 
 export const SUN = { name: 'Sun', mu: GM_SUN, radius: 40, hill: Infinity, pole: null };
 
 export const PLANETS = [
-  planet('Mercury', 0.387, 6, 45, 150, { kind: 0, spin: 0.05, texture: 'textures/mercury.jpg', pole: iauPole(281.0103, 61.4155), colA: [0.32, 0.30, 0.29], colB: [0.70, 0.66, 0.62], atmo: [0.55, 0.55, 0.6] }),
-  planet('Venus', 0.723, 9.5, 65, -60, { kind: 1, spin: 0.02, pole: iauPole(272.76, 67.16), retro: true, colA: [0.78, 0.58, 0.30], colB: [0.98, 0.90, 0.68], atmo: [1.0, 0.78, 0.45] }),
-  planet('Earth', 1.0, 10, 95, 0, { kind: 2, spin: 0.25, pole: iauPole(0, 90), texture: 'textures/earth.jpg', colA: [0.03, 0.12, 0.35], colB: [0.20, 0.45, 0.18], atmo: [0.35, 0.65, 1.0] }),
-  planet('Mars', 1.524, 7, 70, 80, { kind: 3, spin: 0.24, texture: 'textures/mars.jpg', pole: iauPole(317.269202, 54.432516), colA: [0.45, 0.16, 0.07], colB: [0.85, 0.42, 0.20], atmo: [1.0, 0.5, 0.35] }),
+  planet('Mercury', 0.387, 6, 45, 150, { kind: 0, rotDays: 58.646, texture: 'textures/mercury.jpg', pole: iauPole(281.0103, 61.4155), colA: [0.32, 0.30, 0.29], colB: [0.70, 0.66, 0.62], atmo: [0.55, 0.55, 0.6] }),
+  planet('Venus', 0.723, 9.5, 65, -60, { kind: 1, rotDays: 243.025, pole: iauPole(272.76, 67.16), retro: true, colA: [0.78, 0.58, 0.30], colB: [0.98, 0.90, 0.68], atmo: [1.0, 0.78, 0.45] }),
+  planet('Earth', 1.0, 10, 95, 0, { kind: 2, rotDays: 0.99727, pole: iauPole(0, 90), texture: 'textures/earth.jpg', colA: [0.03, 0.12, 0.35], colB: [0.20, 0.45, 0.18], atmo: [0.35, 0.65, 1.0] }),
+  planet('Mars', 1.524, 7, 70, 80, { kind: 3, rotDays: 1.02596, texture: 'textures/mars.jpg', pole: iauPole(317.269202, 54.432516), colA: [0.45, 0.16, 0.07], colB: [0.85, 0.42, 0.20], atmo: [1.0, 0.5, 0.35] }),
   // gas giants: reach chosen for GM ~1200 (Jupiter) and ~700 (Saturn) — the heaviest planets
-  planet('Jupiter', 5.203, 24, 855, 210, { kind: 4, spin: 0.6, texture: 'textures/jupiter.jpg', pole: iauPole(268.056595, 64.495303), colA: [0.55, 0.36, 0.22], colB: [0.95, 0.86, 0.72], atmo: [1.0, 0.78, 0.55] }),
-  planet('Saturn', 9.537, 20, 1263, 320, { kind: 5, spin: 0.55, texture: 'textures/saturn.jpg', pole: iauPole(40.589, 83.537), colA: [0.72, 0.6, 0.4], colB: [0.97, 0.91, 0.74], atmo: [1.0, 0.9, 0.65], rings: [1.3, 2.35] }),
+  planet('Jupiter', 5.203, 24, 855, 210, { kind: 4, rotDays: 0.41354, texture: 'textures/jupiter.jpg', pole: iauPole(268.056595, 64.495303), colA: [0.55, 0.36, 0.22], colB: [0.95, 0.86, 0.72], atmo: [1.0, 0.78, 0.55] }),
+  planet('Saturn', 9.537, 20, 1263, 320, { kind: 5, rotDays: 0.44401, texture: 'textures/saturn.jpg', pole: iauPole(40.589, 83.537), colA: [0.72, 0.6, 0.4], colB: [0.97, 0.91, 0.74], atmo: [1.0, 0.9, 0.65], rings: [1.3, 2.35] }),
 ];
 
 export const HOME = 2; // Earth

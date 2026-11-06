@@ -1074,7 +1074,7 @@ function frameBody(now) {
     const scale = Math.max(r, minPx * wpp);
     const marker = THREE.MathUtils.smoothstep((minPx * wpp) / r, 0.5, 1.0);
     const len = Math.hypot(ps[0], ps[1]);
-    pl.vis.update(ps[0], ps[1], scale, -ps[0] / len, -ps[1] / len, sim.t, marker);
+    pl.vis.update(ps[0], ps[1], scale, -ps[0] / len, -ps[1] / len, sim.t, marker, simDt);
     pl.orbit.uniforms.uWorldPerPx.value = wpp;
     pl.soi.mesh.position.set(ps[0], ps[1], 0);
     pl.soi.uniforms.uWorldPerPx.value = wpp;
