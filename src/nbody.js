@@ -23,12 +23,37 @@ const A = new Float64Array(4);
  * surface contains the point (-1 Sun, 0.. planets, -2 none).
  */
 const PX = new Float64Array(PLANETS.length), PY = new Float64Array(PLANETS.length);
+
+// "Over the top of the Sun": a brachistochrone that would cut straight across
+// the Sun is taken to arc high above it instead. While the lift is on, the
+// ship near the Sun is treated as LIFT_H above the plane: it cannot hit the
+// Sun, and only the in-plane part of the Sun's (much weaker) pull acts on it.
+// Beyond LIFT_R1 (just outside Mercury's orbit) nothing changes, and the lift
+// is only ever on during a brachistochrone's main burn.
+const LIFT_H = 400, LIFT_R0 = 250, LIFT_R1 = 450; // keeps the Sun's in-plane pull under ~0.6
+let sunLift = false;
+export function setSunLift(on) { sunLift = on; }
+function liftHeight(r, on = sunLift) {
+  if (!on || r >= LIFT_R1) return 0;
+  if (r <= LIFT_R0) return LIFT_H;
+  const u = (LIFT_R1 - r) / (LIFT_R1 - LIFT_R0);
+  return LIFT_H * u * u * (3 - 2 * u);
+}
+/** The Sun's pull alone, as felt during a brachistochrone burn (lifted). out = [ax, ay]. */
+export function sunAccel(x, y, out, lift = true) {
+  const r2 = x * x + y * y, hh = liftHeight(Math.sqrt(r2), lift);
+  const d2 = r2 + hh * hh, k = -GM_SUN / (d2 * Math.sqrt(d2));
+  out[0] = k * x; out[1] = k * y;
+  return out;
+}
+
 export function gravity(x, y, t, out = A) {
   const r2 = x * x + y * y, r = Math.sqrt(r2);
-  let k = -GM_SUN / (r2 * r);
+  const hh = liftHeight(r), d2s = r2 + hh * hh, ds = Math.sqrt(d2s);
+  let k = -GM_SUN / (d2s * ds);
   let ax = k * x, ay = k * y;
-  let td = r * Math.sqrt(r / GM_SUN);
-  let hit = r < SUN.radius ? -1 : -2;
+  let td = ds * Math.sqrt(ds / GM_SUN);
+  let hit = r < SUN.radius && hh === 0 ? -1 : -2;
   for (let i = 0; i < PLANETS.length; i++) {
     const P = PLANETS[i];
     planetState(i, t, pb);

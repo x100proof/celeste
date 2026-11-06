@@ -11,12 +11,12 @@ import { PLANETS, GM_SUN, bodyState } from './system.js';
 import { refBody } from './nbody.js';
 
 const TMAX = 4000;        // horizon around a planet (sim seconds)
-const TMAX_SUN = 30000;   // horizon in solar orbit: long enough for outer-planet trips and flyby chains
+const TMAX_SUN = 8000;    // horizon in solar orbit: look many laps ahead for encounters
 const SUN_LAPS = 40;
 const PLANET_LAPS = 3;    // an orbit counts as captured if it holds this many laps      // safety cap for tiny orbits (only the first lap is drawn)
 const MAX_SEGMENTS = 12;   // searched; main.js draws only a few of them
 const MAX_DRAW = 1100;     // points per drawn segment
-const EXTEND_BUDGET = 120000;
+const EXTEND_BUDGET = 80000;
 const pb = new Float64Array(4);
 const cur = new Float64Array(4);
 
@@ -54,8 +54,7 @@ function scan(sim, tmaxSun) {
       // impact) is what "captured" means. Only the first lap is drawn.
       if (!seg.drawN && seg.sweep >= TAU * 0.97) seg.drawN = seg.t.length;
       if (seg.sweep >= TAU * PLANET_LAPS) { seg.holds = true; reason = 'closed'; return false; }
-      // limit time spent around one planet (from the start of this pass), and the whole look-ahead
-      if (t - seg.t0 >= TMAX || t - sim.t >= tmaxSun) { reason = 'horizon'; return false; }
+      if (t - sim.t >= TMAX) { reason = 'horizon'; return false; }
     }
     return true;
   };

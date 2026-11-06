@@ -291,7 +291,7 @@ function setTarget(t, quiet = false) {
 /** Change transfer mode: allowed until the trip's first burn. */
 function setMode(m) {
   const trip = ap.trip;
-  if (trip && trip.stage !== 'depart' && !(trip.stage === 'torch' && !trip.torch)) {
+  if (trip && trip.stage !== 'depart' && !(trip.stage === 'brach' && (!trip.brach || trip.brach.stage === 'wait'))) {
     toast('Already under way', 'pick the mode before departure', 'warn');
     return;
   }
@@ -458,7 +458,7 @@ const modeBtns = new Map(MODES.map((m) => {
 }));
 function updateModeButtons() {
   const trip = ap.trip;
-  const locked = !!trip && trip.stage !== 'depart' && !(trip.stage === 'torch' && !trip.torch);
+  const locked = !!trip && trip.stage !== 'depart' && !(trip.stage === 'brach' && (!trip.brach || trip.brach.stage === 'wait'));
   for (const [m, b] of modeBtns) {
     const est = estimates.get(m);
     b.classList.toggle('on', (trip ? trip.mode : selMode) === m); // always shown; selected mode lit
@@ -705,7 +705,7 @@ function updateTargetHud() {
   const p = planner.plan;
   let line;
   switch (planner.status) {
-    case 'planning': line = 'computing departure…'; break;
+    case 'planning': line = 'computing transfer…'; break;
     case 'aiming': line = ap.trip && ap.trip.mode === 'bielliptic' ? 'planning the far-point burn…' : 'aiming the flyby…'; break;
     case 'oncourse': {
       const enc = pred && pred.encounters.find((e) => e.planet === t);
@@ -713,8 +713,14 @@ function updateTargetHud() {
       break;
     }
     case 'flyby': line = `swinging past ${PLANETS[ap.trip.flyby].name}…`; break;
-    case 'departing': line = 'climbing out of the gravity well…'; break;
-    case 'torch': line = ap.trip.torch ? `<span class="t">TORCH</span> · arrive T-${fmtTime(ap.torchLeft)}` : `<span class="t">TORCH</span> · launching`; break;
+    case 'brach': {
+      const b = ap.brach;
+      line = !b ? '' : b.stage === 'wait' ? `lining up the torch burn<br>ignition in <span class="t">${fmtCount(b.ignite)}</span>`
+        : b.stage === 'final' ? 'braking into orbit…'
+        : !b.flipped ? `<span class="t">FULL THRUST</span> · flip in <span class="t">${fmtCount(b.flip)}</span><br>arrive T-${fmtTime(b.arrive)}`
+        : `<span class="t">BRAKING</span> · arrive T-${fmtTime(b.arrive)}`;
+      break;
+    }
     case 'correcting': line = 'off course · computing<br>a mid-course correction…'; break;
     case 'ready': {
       const tS = p.tMid - p.dur / 2 - sim.t;
@@ -733,6 +739,7 @@ function updateTargetHud() {
     case 'nogood': line = p && p.kind === 'capture' ? 'pass is too close or too fast<br>for a clean capture'
       : p && (p.kind === 'correct' || p.kind === 'aim') ? 'no good burn found yet<br>trying again shortly'
       : 'no clean transfer this window<br>waiting for the next one'; break;
+    case 'departing': // leaving the gravity well after the departure burn
     case 'orbit': {
       const enc = pred && pred.encounters.find((e) => e.planet === t);
       line = enc ? `on course · arrive T-${fmtTime(enc.t - sim.t)}${enc.lap > 1 ? ` (lap ${enc.lap})` : ''}<br>closest ${fmtD(enc.ca.alt)}${enc.impact ? ' — IMPACT' : ''}`
@@ -770,7 +777,7 @@ const fuelEl = document.getElementById('r-fuel');
 function updateFuel() {
   const f = ap.trip ? Math.round(ap.fuel * FUEL_SCALE) : lastTripFuel;
   if (fuelEl._v !== f) { fuelEl.querySelector('b').textContent = f; fuelEl._v = f; }
-  fuelEl.classList.toggle('burning', !!easyBurn || !!(ap.trip && ap.trip.stage === 'torch'));
+  fuelEl.classList.toggle('burning', !!easyBurn || !!(ap.brach && ap.brach.stage !== 'wait'));
 }
 let hold = null;        // 'pro' | 'retro' | null — attitude hold
 
@@ -884,7 +891,13 @@ function directWarp(dt, plan, tS) {
     ? pred.encounters.find((e) => e.planet === tr0.flyby && e.t > sim.t) : null;
   if (!sim.alive) target = 1;
   else if (easyBurn) target = cap = burnRate(easyBurn.plan);
-  else if (ap.trip && ap.trip.stage === 'torch') target = cap = profile(ap.torchLeft, 1);
+  else if (ap.brach) {
+    // brachistochrone: run down to ignition, to the flip, then to arrival,
+    // each watched in real time
+    const b = ap.brach;
+    const tau = b.stage === 'wait' ? b.ignite : b.stage === 'final' ? 4 : !b.flipped ? b.flip : b.arrive;
+    target = cap = profile(tau, 1);
+  }
   else if (plan && tS > 0) target = cap = profile(tS, burnRate(plan));
   else if (planner.status === 'planning' || planner.status === 'correcting' || planner.status === 'aiming') target = Math.min(warp, 5);
   else if (flybyEnc) target = cap = profile(flybyEnc.t - sim.t, 2); // slingshot: watch the flyby
@@ -911,14 +924,19 @@ function handleEvents(events) {
   for (const ev of events) {
     if (ev.type === 'ignition') {
       dbg.record('event', 'ignition', { kind: ev.plan.kind, dur: ev.plan.dur, thrust: ev.plan.thrust, t: sim.t });
-      toast('Ignition', `${ev.plan.dur.toFixed(1)} s planned burn`, 'go');
+      toast('Ignition', ev.plan.kind === 'brach' ? 'full thrust · flip halfway' : `${ev.plan.dur.toFixed(1)} s planned burn`, 'go');
       updateModeButtons();
       continue;
     }
     if (ev.type === 'cut') {
       setHold(null);
       dbg.record('event', 'engine cut', { kind: ev.plan.kind, t: sim.t });
-      toast('Engine cut', ev.plan.kind === 'torch' ? 'torch burn complete · settling into orbit' : 'burn complete', 'go');
+      toast('Engine cut', ev.plan.kind === 'brach' ? 'in orbit' : 'burn complete', 'go');
+      continue;
+    }
+    if (ev.type === 'flip') {
+      dbg.record('event', 'flip', { t: sim.t });
+      toast('Flip', 'turning round to brake', 'go');
       continue;
     }
     dbg.record('event', ev.type, { body: ev.body, t: sim.t });
@@ -1029,7 +1047,7 @@ function frameBody(now) {
   // --- autopilot: the player only picks targets; the ship flies itself
   const plan = ap.plan;
   const tS = ap.timeToBurn;
-  const torching = !!ap.trip && ap.trip.stage === 'torch';
+  const torching = !!ap.brach; // the brachistochrone steers itself
   const armed = !!plan && sim.alive && !easyBurn && tS > 0 && tS < plan.armWindow;
   // Minimal rotation: coast with a fixed attitude; start turning only when the
   // turn will just finish ~1 real second before ignition; track during the burn.
@@ -1044,7 +1062,7 @@ function frameBody(now) {
   if (turnNow && !torching && hold !== planDir) setHold(planDir);
   if ((!turnNow || torching) && hold) setHold(null);
 
-  // turn toward the planned burn direction (the torch steers itself)
+  // turn toward the planned burn direction (the brachistochrone steers itself)
   const holdPlan = easyBurn ? easyBurn.plan : plan;
   if (hold && sim.alive && holdPlan) {
     bodyState(holdPlan.frame, sim.t, ps);
@@ -1149,6 +1167,9 @@ function frameBody(now) {
   // Draw the first few segments, plus the encounter that matters (the target's,
   // if one is set) even when it is several laps / segments ahead.
   const focusEnc = pickEncounter(pred);
+  // the brachistochrone's own planned path replaces the coasting prediction
+  // from just before ignition until the final approach
+  const brachDrawn = !!ap.brach && sim.alive && ap.brach.stage !== 'final' && (ap.brach.stage !== 'wait' || ap.brach.ignite < 3);
   const drawSegs = pred.segments.slice(0, segRibbons.length);
   if (focusEnc && focusEnc.seg >= drawSegs.length) drawSegs[drawSegs.length - 1] = pred.segments[focusEnc.seg];
   // the continuous path: every segment in order up to the encounter that matters
@@ -1167,7 +1188,15 @@ function frameBody(now) {
       for (let k = 0; k < a.ts.length; k++) { path.push(a.pts[2 * k], a.pts[2 * k + 1]); pathT.push(a.ts[k]); pathSeg.push(i); }
       if (!fullRoute && a.truncated) break;
     }
-    if (sim.alive && path.length >= 4) {
+    // brachistochrone under way: the future path is the planned torch run
+    const bp = brachDrawn ? ap.brachPath() : null;
+    if (bp) {
+      pathRibbon.set(bp.pts, false);
+      pathRibbon.uniforms.uWorldPerPx.value = wpp;
+      pathRibbon.uniforms.uFade.value = 0.12;
+      pathRibbon.visible = true;
+      if (bp.flipIdx > 0 && !ap.brach.flipped) placeLabel('flip', 'burn', 'FLIP', bp.pts[2 * bp.flipIdx], bp.pts[2 * bp.flipIdx + 1], 12);
+    } else if (sim.alive && path.length >= 4) {
       const stride = Math.max(1, Math.ceil(path.length / 2 / 3900)) * 2;
       const pts = stride === 2 ? path : path.filter((_, k) => (k % stride) < 2);
       checkPath(pts, pathT.filter((_, k) => k % (stride / 2) === 0), pathSeg.filter((_, k) => k % (stride / 2) === 0), stride / 2, wpp);
@@ -1180,7 +1209,8 @@ function frameBody(now) {
   // Option A: purple = only the orbit you are in NOW (around the planet whose
   // gravity well you are in, else around the Sun). The blue line is the future.
   segRibbons.forEach((rb, i) => {
-    const seg = i === 0 ? pred.segments[0] : null;
+    // (no orbit to show while the torch is burning)
+    const seg = i === 0 && !(brachDrawn && ap.brach.stage !== 'wait') ? pred.segments[0] : null;
     if (!seg || !sim.alive) { rb.clear(); return; }
     const st = SEG_STYLE[seg.kind];
     rb.uniforms.uColor.value.setRGB(...st.color);
@@ -1196,7 +1226,7 @@ function frameBody(now) {
 
   planets.forEach((pl) => { pl.encGhost.mesh.visible = false; pl.encSoi.visible = false; pl.ghost.mesh.visible = false; });
   caMarker.visible = false; apMarker.visible = false;
-  const enc = sim.alive ? focusEnc : null;
+  const enc = sim.alive && !brachDrawn ? focusEnc : null;
   if (enc) {
     const pl = planets[enc.planet];
     pl.encGhost.update(enc.px, enc.py, Math.max(pl.p.radius, 4.5 * wpp), 0, 0, sim.t, 0);

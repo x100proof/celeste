@@ -42,9 +42,12 @@ self.onmessage = (e) => {
   sim.t = node.t; sim.x = node.x; sim.y = node.y; sim.vx = node.vx; sim.vy = node.vy;
   sim.body = body; sim.captured = true;
   sim.traj.reset(node.t, node.x, node.y, node.vx, node.vy);
-  // schedule relative to the game's clock, not the (slightly earlier) node
-  if (simT > node.t) sim.step(simT - node.t, 0);
   sim.version = version;
+  // schedule relative to the game's clock, not the (slightly earlier) node.
+  // Hohmann keeps the original scheme: plan from the node itself, with the
+  // correction lead measured from it.
+  if (trip.mode === 'hohmann') lead += simT - node.t;
+  else if (simT > node.t) { sim.step(simT - node.t, 0); sim.version = version; }
   const plan = makePlan(sim, kind, trip, lead);
   if (!plan) { self.postMessage({ id, plan: null }); job = null; return; }
   plan.version = version;

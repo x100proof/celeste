@@ -77,7 +77,8 @@ export function initialDeparture(sim, trip) {
   const base = initialPlan(sim, aimAt);
   if (!base) return null;
   base.target = trip.target; base.mode = trip.mode;
-  if (trip.mode === 'hohmann') return base;
+  // Hohmann keeps the original planner exactly (same grid, limits and scoring)
+  if (trip.mode === 'hohmann') { base.legacy = true; return base; }
   const el = sim.elements();
   // search the next lap (and the one after) of the parking orbit, starting now
   base.tIdeal = sim.t + 2 + 0.6 * base.period;
@@ -159,7 +160,7 @@ function evaluate(base, plan, tMid, dur) {
   const leaveBy = t + plan.H.tFlight * 3 + plan.period * 1.5; // must have left the planet by then
   let best = Infinity, bestT = 0, bestV = 0, steps = 0, departed = false;
   let biDone = !plan.bi, lastRv = 0, dvAim = 0, nearMiss = false;
-  while (tr.endT < tEnd && steps++ < 120000) {
+  while (tr.endT < tEnd && steps++ < (plan.legacy ? 60000 : 120000)) {
     if (!tr.extendStep()) break;
     const n = tr.length - 1;
     if (!departed) {
@@ -173,7 +174,7 @@ function evaluate(base, plan, tMid, dur) {
     }
     // stay clear of planets that are not part of the plan: a near miss in the
     // planner can become a crash in flight
-    if ((steps & 3) === 0) {
+    if (!plan.legacy && (steps & 3) === 0) {
       for (let k = 0; k < PLANETS.length; k++) {
         if (k === plan.from || k === aim || k === plan.target) continue;
         planetState(k, tr.t[n], ps);
@@ -255,7 +256,7 @@ export function* refine(sim, plan) {
   // the target crosses its own gravity well in hill / orbital speed seconds
   const Tp = PLANETS[plan.aimBody ?? plan.target];
   const stepMax = (0.5 * Tp.hill) / (Tp.a * Tp.w);
-  const N = Math.min(160, Math.max(24, Math.ceil((2 * half) / stepMax))), stepT = (2 * half) / N;
+  const N = plan.legacy ? 24 : Math.min(160, Math.max(24, Math.ceil((2 * half) / stepMax))), stepT = (2 * half) / N;
   for (const center of [plan.tIdeal, plan.tIdeal + plan.synodic]) {
     for (let i = 0; i <= N; i++) {
       for (const d of plan.durs || [0.6, 0.8, 1, 1.25, 1.6].map((k) => plan.dur * k)) { tryIt(center - half + i * stepT, d); yield; }
@@ -283,7 +284,7 @@ export function* refine(sim, plan) {
  * The duration is refined by simulating the burn. `visit` is the predicted
  * pass through the target (from predict()).
  */
-export function planCapture(sim, target, visit) {
+export function planCapture(sim, target, visit, legacy = false) {
   const T = PLANETS[target];
   if (!visit || visit.impact || visit.ca.pe < 0.3 * T.radius) return null;
   const tPe = sim.t + visit.ca.dt;
@@ -326,7 +327,7 @@ export function planCapture(sim, target, visit) {
   };
   let bestOff = 0, bestDur = dur0, bestScore = Infinity;
   const test = (o, d) => { const f = trial(o, d); if (f < bestScore) { bestScore = f; bestOff = o; bestDur = d; } return f; };
-  for (const k of [0.6, 0.8, 1, 1.25, 1.6, 2.1, 2.8]) for (const fo of [-0.9, -0.6, -0.35, -0.15, 0, 0.2]) test(fo * dur0 * k, dur0 * k);
+  for (const k of legacy ? [0.6, 0.8, 1, 1.25, 1.6] : [0.6, 0.8, 1, 1.25, 1.6, 2.1, 2.8]) for (const fo of [-0.9, -0.6, -0.35, -0.15, 0, 0.2]) test(fo * dur0 * k, dur0 * k);
   const g = 0.381966;
   const golden = (f, a, b, iters) => {
     let x1 = a + g * (b - a), x2 = b - g * (b - a), f1 = f(x1), f2 = f(x2);
@@ -346,7 +347,7 @@ export function planCapture(sim, target, visit) {
     kind: 'capture', frame: target, dir: 'retro', armWindow: 60, target, from: target,
     // ok if it ends bound and clear of the surface; a wide first orbit is
     // tightened by another capture burn at the next periapsis
-    version: sim.version, tMid, dur, ca: r - T.radius, ok: score < 100, refined: true, score,
+    version: sim.version, tMid, dur, ca: r - T.radius, ok: score < (legacy ? 50 : 100), refined: true, score,
   };
 }
 
@@ -414,11 +415,12 @@ const DV_WEIGHT = 25;      // score units (u of miss) per u/s of correction: pre
 export function initialCorrection(sim, trip, lead) {
   const tStart = sim.t + lead;
   const el = elements(sim.x, sim.y, sim.vx, sim.vy, GM_SUN);
-  const horizon = el.bound ? Math.min(60000, Math.max(4000, 1.5 * el.period)) : 8000;
+  const legacy = trip.mode === 'hohmann'; // the original fixed 4000 s look-ahead
+  const horizon = legacy ? undefined : el.bound ? Math.min(60000, Math.max(4000, 1.5 * el.period)) : 8000;
   return {
     kind: 'correct', frame: -1, dir: 'plan', angle: 0, thrust: THRUST * FINE, armWindow: 60,
     target: trip.target, from: -1, version: sim.version, tStart, tMid: tStart + 1, dur: 2, dv: 0,
-    horizon, passBody: trip.mode === 'assist' && !trip.flybyDone ? trip.flyby : null,
+    horizon, legacy, passBody: trip.mode === 'assist' && !trip.flybyDone ? trip.flyby : null,
     refined: false, ok: false, score: Infinity,
   };
 }
@@ -482,7 +484,7 @@ function evalCorrection(base, plan, angle, dv) {
   const tEnd = t + (plan.horizon || 4000);
   const PB = plan.passBody != null ? PLANETS[plan.passBody] : null;
   let best = Infinity, bestT = 0, bestV = 0, steps = 0, passed = !PB;
-  while (tr.endT < tEnd && steps++ < 150000) {
+  while (tr.endT < tEnd && steps++ < (plan.legacy ? 80000 : 150000)) {
     if (!tr.extendStep()) break;
     const n = tr.length - 1;
     if (!passed) {
@@ -625,7 +627,7 @@ export class Planner {
     if (T == null || !sim.alive || !trip) { this.plan = null; this.gen = null; this.status = ''; return; }
     if (thrusting && this.plan) return; // keep showing the plan while flying it
     if (sim.body === T && sim.captured) { this.plan = null; this.gen = null; this.status = 'captured'; return; }
-    if (trip.stage === 'torch') { this.plan = null; this.gen = null; this.status = 'torch'; return; }
+    if (trip.stage === 'brach') { this.plan = null; this.gen = null; this.status = 'brach'; return; }
 
     // Arriving at the target (inside it, or a predicted encounter): plan the capture burn.
     if (trip.stage !== 'depart') {
@@ -642,9 +644,10 @@ export class Planner {
         const stale = !p || p.kind !== 'capture' || p.version !== sim.version || sim.t > p.tMid + p.dur / 2;
         if (stale) {
           this.gen = null;
-          this.plan = planCapture(sim, T, visit);
+          const legacy = trip.mode === 'hohmann';
+          this.plan = planCapture(sim, T, visit, legacy);
           // inside the well on a doomed or loose orbit: rescue burn now
-          if (sim.body === T && (!this.plan || !this.plan.ok) && (!visit || visit.impact || (pred.fate && pred.fate.kind !== 'holds'))) {
+          if (!legacy && sim.body === T && (!this.plan || !this.plan.ok) && (!visit || visit.impact || (pred.fate && pred.fate.kind !== 'holds'))) {
             const r = planRescue(sim, T);
             if (r.ok) this.plan = r;
           }
