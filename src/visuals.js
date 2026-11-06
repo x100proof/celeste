@@ -317,7 +317,19 @@ export function createPlanet(p) {
       }
       uniform vec3 uColA, uColB, uAtmo;
       varying vec2 vQ;
+      vec3 surfaceProc(vec3 s);
       vec3 surface(vec3 s) {
+        // NASA mission maps where we have them (Mercury: MESSENGER, Mars: Viking,
+        // Jupiter: Cassini); procedural surfaces otherwise or until loaded
+        if (uHasTex > 0.5 && uKind == 0) {
+          vec3 c = texSphere(s) * 0.62;
+          return mix(c, surfaceProc(s), smoothstep(0.965, 0.985, abs(s.z))); // map has no coverage at the poles
+        }
+        if (uHasTex > 0.5 && uKind == 3) return texSphere(s) * 0.8;
+        if (uHasTex > 0.5 && uKind == 4) return texSphere(s);
+        return surfaceProc(s);
+      }
+      vec3 surfaceProc(vec3 s) {
         if (uKind == 0) { // Mercury: cratered grey
           float n = fbm(s * 3.5);
           float c = smoothstep(0.55, 0.62, fbm(s * 7.0 + 3.0));
@@ -379,8 +391,8 @@ export function createPlanet(p) {
           float c = cos(ang), s = sin(ang);
           vec3 sp = vec3(c * bq.x + s * bq.y, -s * bq.x + c * bq.y, bq.z);
           vec3 surf = surface(sp);
-          if (uKind == 4) {
-            // Jupiter: belts and zones around its (nearly vertical) spin axis,
+          if (uKind == 4 && uHasTex < 0.5) {
+            // Jupiter (until its map loads): belts and zones around its (nearly vertical) spin axis,
             // turbulent edges, and the Great Red Spot at 22 deg south (so it is
             // only glimpsed near the limb when looking down from the north).
             float w = fbm(vec3(sp.x * 3.0, sp.y * 3.0, sp.z * 14.0) + vec3(0.0, 0.0, uTime * 0.01));

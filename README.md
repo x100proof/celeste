@@ -107,6 +107,12 @@ Note that the logs include the visitor's IP address and browser user agent.
 
 - Earth texture: NASA Earth Observatory / NASA Goddard Space Flight Center,
   "Blue Marble" land and oceans mosaic (public domain), via Wikimedia Commons.
+- Mercury texture: NASA MESSENGER global mosaic, 2013 (public domain).
+- Mars texture: NASA/JPL/USGS Viking MDIM 2.1 colorized mosaic (public domain).
+- Jupiter texture: NASA/JPL/Space Science Institute, Cassini cylindrical map
+  PIA07782 (public domain). All via Wikimedia Commons.
+- Venus and Saturn are procedural (NASA's Venus maps show the radar surface
+  under the clouds, not what an observer would see).
 - Planet spin axes: IAU Working Group on Cartographic Coordinates and
   Rotational Elements (north pole right ascension / declination).
 - Rendering: three.js (MIT).
@@ -127,7 +133,7 @@ src/ribbon.js             antialiased glow lines
 src/debug.js              remote debug logging
 src/watchdog-worker.js    freeze watchdog
 vendor/three/             three.js r170 (MIT, see vendor/three/LICENSE)
-textures/earth.jpg        Earth surface: NASA Earth Observatory "Blue Marble" (public domain)
+textures/                 planet maps from NASA missions (public domain, see Credits)
 deploy/                   deploy script and nginx example
 tools/log-server.py       optional debug-log receiver
 ```
