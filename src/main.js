@@ -447,7 +447,7 @@ addEventListener('gesturestart', (e) => e.preventDefault());
 // ------------------------------------------------------------------ HUD
 
 const $ = (id) => document.getElementById(id);
-const hud = { frame: $('r-frame'), status: $('r-status'), alt: $('r-alt'), vel: $('r-vel'), ap: $('r-ap'), pe: $('r-pe'), per: $('r-per'), enc: $('r-enc'), helio: $('r-helio'), tgt: $('r-target'), altLabel: $('l-alt'), clock: $('clock') };
+const hud = { frame: $('r-frame'), status: $('r-status'), tgt: $('r-target'), clock: $('clock') };
 const toastEl = $('toast');
 let toastTimer = 0;
 function toast(big, small = '', cls = '') {
@@ -476,15 +476,8 @@ function updateHud(pred) {
   const el = sim.elements();
   const rel = sim.rel(ps);
   hud.frame.textContent = body.name;
-  const ref = sim.body < 0 ? 0 : body.radius; // solar frame: distance from the Sun, comparable to planet orbits
-  hud.alt.textContent = fmtD(el.r - ref);
-  hud.altLabel.textContent = sim.body < 0 ? 'Sun dist.' : 'Altitude';
-  hud.vel.textContent = Math.hypot(rel[2], rel[3]).toFixed(2) + ' u/s';
   const cur = pred.segments[0];
   const leaves = cur.end === 'leaves';
-  hud.ap.textContent = leaves && sim.body >= 0 ? 'leaving' : !el.bound ? 'hyperbolic' : fmtD(el.ra - ref);
-  hud.pe.textContent = fmtD(el.rp - ref);
-  hud.per.textContent = el.bound && !leaves ? fmtTime(el.period) : '—';
   let status, cls = '';
   if (sim.body >= 0) {
     const f = pred.fate;
@@ -504,26 +497,6 @@ function updateHud(pred) {
   hud.status.textContent = status;
   hud.status.className = cls;
 
-  // Where the solar orbit goes (after escape, or now if already in solar orbit)
-  const h = pred.helio;
-  if (h && !h.impact) {
-    const reach = PLANETS.filter((q) => q.a >= h.rp && q.a <= h.ra).map((q) => q.name);
-    hud.helio.classList.remove('hidden');
-    hud.helio.innerHTML = `${sim.body >= 0 ? 'SOLAR ORBIT AFTER ESCAPE' : 'SOLAR ORBIT'}<br>` +
-      `<span class="t">${fmtD(h.rp)} – ${isFinite(h.ra) ? fmtD(h.ra) : '∞'}</span> from Sun<br>` +
-      (reach.length ? `crosses ${reach.join(' · ')}` : 'crosses no planet orbits');
-  } else hud.helio.classList.add('hidden');
-
-  const enc = pickEncounter(pred);
-  if (enc) {
-    const name = PLANETS[enc.planet].name;
-    const what = enc.impact ? 'IMPACT' : enc.bound ? 'CAPTURE' : 'FLYBY';
-    hud.enc.classList.remove('hidden');
-    hud.enc.classList.toggle('bad', enc.impact);
-    const lap = enc.lap > 1 ? ` · lap ${enc.lap}` : '';
-    hud.enc.innerHTML = `${name.toUpperCase()} ENCOUNTER <span class="t">T-${fmtTime(enc.t - sim.t)}</span>${lap}<br>` +
-      (enc.impact ? 'trajectory hits surface' : `closest ${fmtD(enc.ca.alt)} · ${what.toLowerCase()}`);
-  } else hud.enc.classList.add('hidden');
 }
 
 // ---- debugging: find "funny angles" in the blue path and report them
