@@ -6,7 +6,7 @@
 
 import { Sim } from './nbody.js';
 import { makePlan, refinePlan } from './planner.js';
-import { dryRun } from './autopilot.js';
+import { dryRun, setBrachThrust } from './autopilot.js';
 import { pickFlyby } from './planner.js';
 
 /** Slingshot: try flyby planets in order of promise until one works. */
@@ -28,6 +28,7 @@ let job = null;
 self.onmessage = (e) => {
   const m = e.data;
   if (m.kind === 'estimate') {
+    if (m.brachThrust) setBrachThrust(m.brachThrust); // the torch the player has tuned
     // fly every requested mode in turn, reporting each as it finishes
     for (const mode of m.modes) {
       let r;

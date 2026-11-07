@@ -30,7 +30,9 @@ const TAU = 2 * Math.PI;
 function angleTo(from, to) { return Math.abs(((to - from) % TAU + 3 * Math.PI) % TAU - Math.PI); }
 // Brachistochrone ("torch") engine: one rule for every planet, strong enough
 // to beat even Mercury's pull at the parking orbit (2.8) by a wide margin
-export const BRACH_THRUST = 5;
+export const BRACH_THRUST_DEFAULT = 5;
+export let BRACH_THRUST = BRACH_THRUST_DEFAULT; // torch acceleration (u/s^2); tunable from the debug panel
+export function setBrachThrust(a) { BRACH_THRUST = a; }
 const BRACH_PLAN = 0.85;     // the plan uses this fraction of it (margin for the gravity it ignores)
 const BRAKE_END = 0.15;      // the braking burn must have reached orbit by this time to go (game s)
 const AIM = new Float64Array(4), BA = new Float64Array(2), PP = new Float64Array(4);

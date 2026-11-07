@@ -8,7 +8,7 @@ import { Sim } from './nbody.js';
 import { predict } from './predict.js';
 import { fmtDate, fmtSpan, realDate } from './calendar.js';
 import { burnArc, bracketAngle } from './planner.js';
-import { Autopilot, MODES, MODE_NAMES, FUEL_SCALE, dirOffset } from './autopilot.js';
+import { Autopilot, MODES, MODE_NAMES, FUEL_SCALE, dirOffset, BRACH_THRUST, BRACH_THRUST_DEFAULT, setBrachThrust } from './autopilot.js';
 import { Ribbon, circlePoints, FEATHER } from './ribbon.js';
 import { createBackground, createSun, createPlanet, createGhostPlanet, createShip, Particles, createShockwave } from './visuals.js';
 
@@ -328,7 +328,7 @@ function requestEstimates(t) {
       // the selected mode first, so its number arrives soonest
       const modes = [selMode, ...MODES.filter((m) => m !== selMode)];
       for (const m of modes) estimates.set(m, 'pending');
-      estWorker.postMessage({ kind: 'estimate', id, body: sim.body, target: t, modes, simT: sim.t,
+      estWorker.postMessage({ kind: 'estimate', id, body: sim.body, target: t, modes, simT: sim.t, brachThrust: BRACH_THRUST,
         node: { t: tr.t[i], x: tr.x[i], y: tr.y[i], vx: tr.vx[i], vy: tr.vy[i] } });
     } catch (e) { dbg.record('warn', 'estimate worker unavailable', e); }
   }
@@ -342,25 +342,63 @@ function cycleTarget() {
 
 // ---- hidden tuning panel (D): live sliders for camera framing, saved per browser
 const TUNING_KEY = 'celeste.tuning';
-const tuning = { transferZoom: 1.3 }; // >1 = transfer shots zoomed further out
+const tuning = { transferZoom: 1.3, torchThrust: BRACH_THRUST_DEFAULT }; // zoom >1 = transfer shots further out; torch in u/s^2
 try { Object.assign(tuning, JSON.parse(localStorage.getItem(TUNING_KEY) || '{}')); } catch (e) { /* no storage: defaults */ }
 if (!(tuning.transferZoom >= 0.5 && tuning.transferZoom <= 4)) tuning.transferZoom = 1.3;
+if (!(tuning.torchThrust >= 1 && tuning.torchThrust <= 40)) tuning.torchThrust = BRACH_THRUST_DEFAULT;
 const tunePanel = document.getElementById('tune');
 const tuneZoom = document.getElementById('tune-zoom');
 const tuneZoomVal = document.getElementById('tune-zoom-val');
 // the slider is logarithmic: 0 = 0.5x, 1000 = 4x
 const zoomToSlider = (z) => Math.round((1000 * Math.log(z / 0.5)) / Math.log(8));
 const sliderToZoom = (v) => 0.5 * Math.pow(8, v / 1000);
+// torch slider, also logarithmic: 0 = 1 u/s^2, 1000 = 40 u/s^2
+const tuneTorch = document.getElementById('tune-torch');
+const tuneTorchVal = document.getElementById('tune-torch-val');
+const tuneTorchNote = document.getElementById('tune-torch-note');
+const torchToSlider = (a) => Math.round((1000 * Math.log(a)) / Math.log(40));
+const sliderToTorch = (v) => Math.pow(40, v / 1000);
+/** The torch is lit (or flipping) on a trip: thrust changes wait until it is done. */
+function torchUnderWay() {
+  const tr = ap.trip;
+  return !!(tr && tr.stage === 'brach' && tr.brach && tr.brach.stage !== 'wait');
+}
 function showTuning() {
   tuneZoom.value = zoomToSlider(tuning.transferZoom);
   tuneZoomVal.textContent = tuning.transferZoom.toFixed(2) + '×';
+  tuneTorch.value = torchToSlider(tuning.torchThrust);
+  tuneTorchVal.textContent = `${tuning.torchThrust.toFixed(1)} u/s²` + (tuning.torchThrust === BRACH_THRUST_DEFAULT ? ' (default)' : '');
+  tuneTorchNote.classList.toggle('hidden', tuning.torchThrust === BRACH_THRUST);
+}
+/** Put the slider's torch thrust into effect, unless a torch burn is under way
+ * (then the frame loop applies it once the trip ends). A trip still waiting
+ * to depart is replanned, and the fuel estimates are flown again. */
+function applyTorch() {
+  if (tuning.torchThrust === BRACH_THRUST || torchUnderWay()) { showTuning(); return; }
+  setBrachThrust(tuning.torchThrust);
+  dbg.record('event', 'torch thrust', { a: tuning.torchThrust });
+  const tr = ap.trip;
+  if (tr) {
+    if (selMode === 'brachistochrone') { ap.setTarget(tr.target, selMode); easyBurn = null; }
+    requestEstimates(tr.target);
+  }
+  showTuning();
 }
 function saveTuning() { try { localStorage.setItem(TUNING_KEY, JSON.stringify(tuning)); } catch (e) { /* ignore */ } }
 tuneZoom.addEventListener('input', () => {
   tuning.transferZoom = +sliderToZoom(+tuneZoom.value).toFixed(2);
   showTuning(); saveTuning();
 });
-document.getElementById('tune-reset').addEventListener('click', () => { tuning.transferZoom = 1.3; showTuning(); saveTuning(); });
+tuneTorch.addEventListener('input', () => {
+  tuning.torchThrust = +sliderToTorch(+tuneTorch.value).toFixed(1);
+  showTuning(); saveTuning();
+});
+tuneTorch.addEventListener('change', applyTorch); // replan once, on release
+document.getElementById('tune-reset').addEventListener('click', () => {
+  tuning.transferZoom = 1.3; tuning.torchThrust = BRACH_THRUST_DEFAULT;
+  saveTuning(); applyTorch(); showTuning();
+});
+applyTorch(); // a saved torch setting takes effect at load
 showTuning();
 
 const hint = document.getElementById('hint');
@@ -1112,6 +1150,7 @@ function frameBody(now) {
     sim.heading = Number.isFinite(r[2]) ? Math.atan2(r[3], r[2]) : 0;
   }
   if (!paused) directWarp(dt, plan, tS);
+  if (tuning.torchThrust !== BRACH_THRUST && !torchUnderWay()) applyTorch(); // a change held during a torch burn
   updateWarpLabel();
 
   // --- physics (the autopilot ignites and cuts burns exactly on schedule)

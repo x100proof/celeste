@@ -41,7 +41,7 @@ Fuel is total thrust delivered (delta-v), shown as a plain number.
 | Drag, scroll, pinch, `+` / `−` | Pan and zoom (switches the camera to manual) |
 | Camera button or `C` | Back to the cinematic camera |
 | `G` or the ghost button | Ghost planets: where planets will be when you arrive |
-| `D` | Hidden debug panel: a slider for how far out the cinematic camera frames a transfer (saved in your browser) |
+| `D` | Hidden debug panel: sliders for how far out the cinematic camera frames a transfer, and for the Brachistochrone torch thrust (1–40, default 5: more is faster and costs more fuel). Saved in your browser |
 
 ## How it works
 
