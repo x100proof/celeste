@@ -8,6 +8,7 @@
 
 import { PLANETS, THRUST, GM_SUN, planetState, bodyState } from './system.js';
 import { Sim, gravity, sunAccel, setSunLift } from './nbody.js';
+import { elements } from './physics.js';
 import { Planner, pickFlyby, arrivalRadius } from './planner.js';
 import { predict } from './predict.js';
 
@@ -31,10 +32,13 @@ function angleTo(from, to) { return Math.abs(((to - from) % TAU + 3 * Math.PI) %
 // to beat even Mercury's pull at the parking orbit (2.8) by a wide margin
 export const BRACH_THRUST = 5;
 const BRACH_PLAN = 0.85;     // the plan uses this fraction of it (margin for the gravity it ignores)
-const FINAL_T = 2.5;         // last seconds of the braking burn flown by the gentle final controller
+const BRAKE_END = 0.15;      // the braking burn must have reached orbit by this time to go (game s)
+const AIM = new Float64Array(4), BA = new Float64Array(2), PP = new Float64Array(4);
 const GUIDE_DT = 0.1;        // re-solve interval (game s)
 const FLIP_RATE = 2.4;       // turn rate (rad per game s): the flip takes about 1.3 game s
 const ALIGN = 0.2;           // the engine lights only within this angle (rad) of the wanted heading
+const FLIP_LOCK = 1.5;        // plan frozen this long (game s) before the flip
+const STEER_ON = 0.8;        // braking burn: the engine stays lit while turning less than this (rad)
 
 /** Heading offset from (frame-relative) prograde for a plan's burn direction. */
 export function dirOffset(pl) { return pl.dir === 'retro' ? Math.PI : pl.dir === 'plan' ? pl.angle : 0; }
@@ -161,15 +165,15 @@ export class Autopilot {
   // with the first burn direction) → 'burn' → flip → 'final' (spiral into a
   // low orbit around the target) → the normal capture logic ('cruise').
 
-  /** Arrival point at absolute time t: near the edge of the target's gravity
-   * well on the side the ship comes from, moving with the planet plus a
-   * circular orbital velocity there. */
+  /** Arrival point at absolute time t: the final low orbit itself (the
+   * capture radius), on the side the ship comes from, moving with the planet
+   * plus the circular orbital velocity there, so the braking burn ends in orbit. */
   brachAim(t, out) {
     const tr = this.trip, T = PLANETS[tr.target], b = tr.brach;
     planetState(tr.target, t, ps);
     // the arrival side is fixed relative to the planet's own direction from the Sun
     const th = Math.atan2(ps[1], ps[0]) + b.side;
-    const rA = 0.8 * T.hill, vc = Math.sqrt(T.mu / rA);
+    const rA = arrivalRadius(T), vc = Math.sqrt(T.mu / rA);
     const c = Math.cos(th), s = Math.sin(th);
     out[0] = ps[0] + rA * c; out[1] = ps[1] + rA * s;
     out[2] = ps[2] - vc * s; out[3] = ps[3] + vc * c; // counter-clockwise around the planet
@@ -266,8 +270,7 @@ export class Autopilot {
     if (!force && sim.t - b.tSolve < GUIDE_DT) return;
     // arrive on the side the ship is coming from (so the path never crosses
     // the planet), measured from the planet's Sun line so it moves with it
-    planetState(this.trip.target, sim.t, ps);
-    b.side = Math.atan2(sim.y - ps[1], sim.x - ps[0]) - Math.atan2(ps[1], ps[0]);
+    this.brachSide();
     const prevT = b.sol ? b.sol.T - (sim.t - b.tSolve) : 0;
     // turning time still needed onto the current burn direction, and for the
     // flip (from the last solution's angle between the two burns; 180° at first)
@@ -284,9 +287,67 @@ export class Autopilot {
     b.sol = sol;
     b.flipAt = sim.t + sol.t1;
     b.tArrive = sim.t + sol.T;
-    b.geff = this.brachFly(sol, 80).geff;
+    b.geff = this.brachFly(sol, 200).geff;
     const u = sol.t1 > 1e-6 ? sol.A : sol.B;
     b.dir = Math.atan2(u[1], u[0]);
+  }
+
+  /** Where on the final orbit to arrive: a quarter turn round from the side
+   * the ship comes from, so the path runs PAST the planet at orbit height and
+   * the ship arrives moving along the (counter-clockwise) orbit, not falling
+   * straight at the planet. Measured from the planet's Sun line so it moves
+   * with the planet; frozen once close, where the ship is lined up on it. */
+  brachSide() {
+    const sim = this.sim, b = this.trip.brach, T = PLANETS[this.trip.target];
+    planetState(this.trip.target, sim.t, ps);
+    const d = Math.hypot(sim.x - ps[0], sim.y - ps[1]);
+    if (b.side != null && d < 4 * arrivalRadius(T)) return;
+    b.side = Math.atan2(sim.y - ps[1], sim.x - ps[0]) + Math.PI / 2 - Math.atan2(ps[1], ps[0]);
+  }
+
+  /**
+   * The braking burn's steering (after the flip): the "zero-effort miss /
+   * velocity" law, a = 6 ZEM / tgo^2 - 2 ZEV / tgo, aimed at the final orbit.
+   * On the planned path it is exactly constant braking, so it looks like one
+   * steady burn; off it, it bends the burn smoothly back on course instead of
+   * flipping again. The pull modelled here is the (lifted) Sun's plus the
+   * target planet's, both taken at the ship.
+   */
+  brakeAccel(x, y, vx, vy, t, tgo, out) {
+    const tr = this.trip, T = PLANETS[tr.target];
+    const aim = this.brachAim(t + tgo, AIM);
+    this.pullAt(x, y, t, G);
+    const gx = G[0], gy = G[1];
+    const zx = aim[0] - (x + vx * tgo + 0.5 * gx * tgo * tgo), zy = aim[1] - (y + vy * tgo + 0.5 * gy * tgo * tgo);
+    const wx = aim[2] - (vx + gx * tgo), wy = aim[3] - (vy + gy * tgo);
+    out[0] = (6 * zx) / (tgo * tgo) - (2 * wx) / tgo;
+    out[1] = (6 * zy) / (tgo * tgo) - (2 * wy) / tgo;
+    return out;
+  }
+
+  /** Time to go for the braking law: stretched (a little at a time) when the
+   * law asks for more than the engine has; never without limit. Close to a
+   * strong planet no stretch helps, and the engine just runs flat out. */
+  brakeTgo(x, y, vx, vy, t, tgo) {
+    const t0 = tgo;
+    for (let i = 0; i < 10; i++) {
+      this.brakeAccel(x, y, vx, vy, t, tgo, BA);
+      if (Math.hypot(BA[0], BA[1]) <= BRACH_THRUST) return tgo;
+      tgo *= 1.04;
+    }
+    return t0;
+  }
+
+  /** Pull on the ship from the (lifted) Sun and the target planet. out = [ax, ay]. */
+  pullAt(x, y, t, out) {
+    const T = PLANETS[this.trip.target];
+    sunAccel(x, y, out);
+    planetState(this.trip.target, t, PP);
+    const dx = x - PP[0], dy = y - PP[1];
+    // softened inside the final orbit so a planned path that grazes the planet stays finite
+    const d = Math.max(Math.hypot(dx, dy), 0.8 * arrivalRadius(T));
+    out[0] -= (T.mu * dx) / d ** 3; out[1] -= (T.mu * dy) / d ** 3;
+    return out;
   }
 
   /** Turn toward `want` at the flip rate for h game seconds; returns the angle still to go. */
@@ -338,24 +399,67 @@ export class Autopilot {
           b.dir = Math.atan2(b.sol.B[1], b.sol.B[0]);
           events.push({ type: 'flip' });
         }
-        if (b.turning && angleTo(sim.heading, b.dir) < ALIGN) { b.turning = false; this.brachUpdate(true); }
-        if (!b.turning) this.brachUpdate();
+        if (b.turning && angleTo(sim.heading, b.dir) < ALIGN) {
+          // pointing the new way: the braking burn takes over from the plan
+          b.turning = false; b.braking = true;
+          b.tArrive = sim.t + this.brakeTgo(sim.x, sim.y, sim.vx, sim.vy, sim.t, Math.max(0.5, b.tArrive - sim.t));
+        }
+        if (b.braking) {
+          this.brachSide();
+          let tgo = b.tArrive - sim.t;
+          // in orbit already? cut the engine: the capture is done
+          if (sim.body === tr.target) {
+            bodyState(tr.target, sim.t, ps);
+            const el = elements(sim.x - ps[0], sim.y - ps[1], sim.vx - ps[2], sim.vy - ps[3], T.mu);
+            const good = el.bound && el.rp >= 1.3 * T.radius && el.ra <= 0.45 * T.hill;
+            if (good && (el.e < 0.04 || tgo < BRAKE_END)) {
+              tr.stage = 'cruise'; // the normal logic confirms the capture
+              events.push({ type: 'cut', plan: { kind: 'brach' } });
+              if (left > 1e-9) events.push(...sim.step(left, 0));
+              break;
+            }
+          }
+          if (tgo < BRAKE_END) { b.stage = 'final'; this.finalUsed = true; continue; } // safety net
+          // At orbit height the ship skims round the planet for the last
+          // moments of braking: there it brakes against the circular orbit
+          // speed directly (same direction, no turn) until the orbit is round.
+          if (dist < 1.3 * arrivalRadius(T)) { b.stage = 'final'; continue; }
+          tgo = this.brakeTgo(sim.x, sim.y, sim.vx, sim.vy, sim.t, tgo);
+          b.tArrive = sim.t + tgo;
+          this.brakeAccel(sim.x, sim.y, sim.vx, sim.vy, sim.t, tgo, BA);
+          const want = Math.hypot(BA[0], BA[1]);
+          b.dir = Math.atan2(BA[1], BA[0]);
+          const h = Math.min(left, tgo < 3 ? 0.01 : 0.03);
+          const togo = this.turnToward(b.dir, h);
+          // small steering changes are flown with the engine lit (only big
+          // turns, like the flip, coast)
+          const a = togo < STEER_ON ? Math.min(BRACH_THRUST, want) * Math.cos(togo) : 0;
+          setSunLift(true, tr.target);
+          try { events.push(...sim.step(h, a)); } finally { setSunLift(false); }
+          this.fuel += a * h;
+          left -= h;
+          engineOn = a > 1e-6; accel = a;
+          continue;
+        }
+        // the last moments before the flip fly the plan as it stands: re-solving
+        // this close to the flip can hop between answers and twitch the ship
+        if (!b.turning && b.flipAt - sim.t > FLIP_LOCK) this.brachUpdate();
         const tgo = b.tArrive - sim.t;
-        // the last seconds (and anything that goes wrong close in) are flown by
-        // the gentle final controller: full-thrust bang-bang would chatter
-        if ((b.flipped && !b.turning && tgo < FINAL_T) || tgo < 0.4 || dist < 0.5 * T.hill) { b.stage = 'final'; continue; }
+        if (tgo < 0.4) { b.stage = 'final'; this.finalUsed = true; continue; }
         const h = Math.min(left, GUIDE_DT / 2);
         const togo = this.turnToward(b.dir, h);
-        // the engine waits while the ship swings round (the flip)
-        const a = togo < ALIGN ? BRACH_PLAN * BRACH_THRUST : 0;
-        setSunLift(true);
+        // the engine waits while the ship swings round (the flip); small
+        // steering changes are flown with it lit
+        const a = b.turning ? (togo < ALIGN ? BRACH_PLAN * BRACH_THRUST : 0) : togo < STEER_ON ? BRACH_PLAN * BRACH_THRUST * Math.cos(togo) : 0;
+        setSunLift(true, tr.target);
         try { events.push(...sim.step(h, a)); } finally { setSunLift(false); }
         this.fuel += a * h;
         left -= h;
         engineOn = a > 0; accel = a;
         continue;
       }
-      // final: spiral down to a circular orbit at the arrival radius
+      // The end of the braking burn, at orbit height: brake toward the circular
+      // orbit speed (and height). Also the safety net if braking ran out of time.
       const rx = sim.x - ps[0], ry = sim.y - ps[1], vx = sim.vx - ps[2], vy = sim.vy - ps[3];
       const r = Math.hypot(rx, ry), rA = arrivalRadius(T);
       const nx = rx / r, ny = ry / r;
@@ -372,10 +476,10 @@ export class Autopilot {
         if (left > 1e-9) events.push(...sim.step(left, 0));
         break;
       }
-      const h = Math.min(left, 0.05);
-      const want = Math.min(BRACH_THRUST, Math.hypot(dvx, dvy) / 0.6);
+      const h = Math.min(left, 0.02);
+      const want = Math.min(BRACH_THRUST, Math.hypot(dvx, dvy) / 0.3);
       const togo = this.turnToward(Math.atan2(dvy, dvx), h);
-      const a = togo < ALIGN ? want : 0;
+      const a = togo < STEER_ON ? want * Math.cos(togo) : 0;
       events.push(...sim.step(h, a));
       this.fuel += a * h;
       left -= h;
@@ -415,11 +519,12 @@ export class Autopilot {
       if (tm >= tA && tm < tB) { ux = sol.A[0] / l1; uy = sol.A[1] / l1; }
       else if (tm >= tC) { ux = sol.B[0] / l2; uy = sol.B[1] / l2; }
       if (tm >= tB && flipIdx < 0) flipIdx = i;
-      // midpoint step
-      sunAccel(x, y, G);
+      // midpoint step (the target planet's pull included: near a strong
+      // planet the infall at the end changes when to flip)
+      this.pullAt(x, y, sim.t + t, G);
       const mx = x + vx * h / 2, my = y + vy * h / 2;
       const mvx = vx + (G[0] + a * ux) * h / 2, mvy = vy + (G[1] + a * uy) * h / 2;
-      sunAccel(mx, my, G);
+      this.pullAt(mx, my, sim.t + tm, G);
       if (tm >= tA) { // the solver models the pull after the turn-in coast
         const w = T - tm;
         ivx += G[0] * h; ivy += G[1] * h; irx += G[0] * h * w; iry += G[1] * h * w;
@@ -433,10 +538,28 @@ export class Autopilot {
     return { pts, flipIdx, geff };
   }
 
+  /** The braking burn ahead, flown forward with its own steering law (for drawing). */
+  brakeFly(n) {
+    const sim = this.sim, b = this.trip.brach, T = PLANETS[this.trip.target];
+    let x = sim.x, y = sim.y, vx = sim.vx, vy = sim.vy, t = sim.t;
+    const tEnd = b.tArrive, pts = [x, y];
+    const h = Math.max(1e-3, (tEnd - t) / n);
+    for (let i = 0; i < n && tEnd - t > BRAKE_END; i++) {
+      this.brakeAccel(x, y, vx, vy, t, tEnd - t, BA);
+      const k = Math.min(1, BRACH_THRUST / (Math.hypot(BA[0], BA[1]) || 1));
+      this.pullAt(x, y, t, G);
+      vx += (BA[0] * k + G[0]) * h; vy += (BA[1] * k + G[1]) * h;
+      x += vx * h; y += vy * h; t += h;
+      pts.push(x, y);
+    }
+    return pts;
+  }
+
   /** The planned path from the ship's current state: world points and the flip's index. */
   brachPath(n = 160) {
     const b = this.trip && this.trip.stage === 'brach' && this.trip.brach;
     if (!b || !b.sol || b.stage === 'final' || b.tArrive <= this.sim.t) return null;
+    if (b.braking) return { pts: this.brakeFly(n), flipIdx: -1 };
     // the plan was solved at b.tSolve (at most GUIDE_DT ago): close enough to draw from the ship
     const { pts, flipIdx } = this.brachFly(b.sol, n);
     return { pts, flipIdx: b.flipped ? -1 : flipIdx };

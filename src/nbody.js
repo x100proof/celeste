@@ -31,8 +31,10 @@ const PX = new Float64Array(PLANETS.length), PY = new Float64Array(PLANETS.lengt
 // Beyond LIFT_R1 (just outside Mercury's orbit) nothing changes, and the lift
 // is only ever on during a brachistochrone's main burn.
 const LIFT_H = 400, LIFT_R0 = 250, LIFT_R1 = 450; // keeps the Sun's in-plane pull under ~0.6
-let sunLift = false;
-export function setSunLift(on) { sunLift = on; }
+let sunLift = false, liftKeep = -2;
+/** Lift on/off. While on, planets other than `keep` (the target) are flown
+ * over too: no collision with them and no pull from them. */
+export function setSunLift(on, keep = -2) { sunLift = on; liftKeep = keep; }
 function liftHeight(r, on = sunLift) {
   if (!on || r >= LIFT_R1) return 0;
   if (r <= LIFT_R0) return LIFT_H;
@@ -58,6 +60,7 @@ export function gravity(x, y, t, out = A) {
     const P = PLANETS[i];
     planetState(i, t, pb);
     PX[i] = pb[0]; PY[i] = pb[1];
+    if (sunLift && i !== liftKeep) { W[i] = 0; continue; } // flown high over (see setSunLift)
     const dx = x - pb[0], dy = y - pb[1];
     const d2 = dx * dx + dy * dy, d = Math.sqrt(d2);
     k = -P.mu / (d2 * d);
