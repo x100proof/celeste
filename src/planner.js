@@ -26,6 +26,10 @@ const mod = (x, m) => ((x % m) + m) % m;
  */
 /** Score units (u of miss distance) per u/s of arrival speed at the target. */
 const ARRIVAL_SPEED_WEIGHT = 5;
+/** Score units per second of arrival later than LATE_K × the textbook Hohmann time. */
+const LATE_W = 0.2, LATE_K = 1.3;
+/** Hohmann: score units per u/s of departure burn beyond the transfer's need. */
+const HOH_FUEL_W = 10;
 
 export function arrivalRadius(T) {
   return Math.min(2.5 * T.radius, Math.max(1.5 * T.radius, 0.3 * T.hill));
@@ -42,7 +46,11 @@ function hohmann(from, to, parkR) {
   const nuInf = Math.acos(-1 / e);
   const nuR = Math.acos(Math.max(-1, Math.min(1, (pH / P.hill - 1) / e)));
   const tFlight = timeFromPeri({ e, n: Math.sqrt(P.mu / (-aH) ** 3) }, nuR);
-  const dv = Math.sqrt(vinf * vinf + (2 * P.mu) / parkR) - Math.sqrt(P.mu / parkR);
+  // Departure burn. The textbook formula escapes the planet "to infinity"
+  // (vinf^2 + 2mu/r). Here the Sun takes over at the edge of the planet's
+  // small Hill sphere, only a few parking radii out, so the ship only has to
+  // climb that far: the textbook figure was ~1.6x too big.
+  const dv = Math.sqrt(vinf * vinf + 2 * P.mu * (1 / parkR - 1 / P.hill)) - Math.sqrt(P.mu / parkR);
   const dw = T.w - P.w;
   const needBurn = Math.PI - T.w * tH - dw * tFlight; // target-minus-planet phase at burn
   return { tH, vinf, nuInf, tFlight, dv, dw, needBurn, outward: r2 > r1 };
@@ -223,6 +231,14 @@ function evaluate(base, plan, tMid, dur) {
     score = best < T.hill ? Math.abs(best - desired) + ARRIVAL_SPEED_WEIGHT * bestV : 1e4 + best;
   }
   score += (plan.fuelW || 0) * (dur * THRUST + dvAim) + (plan.timeW || 0) * (bestT - tBurnEnd) + (nearMiss ? 400 : 0);
+  // Hohmann: arrive on the FIRST pass. Without this, a pass a whole extra
+  // solar lap later (twice the trip) could win on a fraction of a point.
+  if (plan.legacy) {
+    score += LATE_W * Math.max(0, bestT - tBurnEnd - LATE_K * plan.H.tH);
+    // ...and a Hohmann is the low-energy transfer: a much bigger burn makes a
+    // faster, hotter trip that only looks good because it arrives earlier
+    score += HOH_FUEL_W * Math.max(0, dur * THRUST - 1.15 * plan.H.dv);
+  }
   return { score, ca: best - A.radius, t: bestT, impact: false };
 }
 
@@ -420,7 +436,7 @@ export function initialCorrection(sim, trip, lead) {
   return {
     kind: 'correct', frame: -1, dir: 'plan', angle: 0, thrust: THRUST * FINE, armWindow: 60,
     target: trip.target, from: -1, version: sim.version, tStart, tMid: tStart + 1, dur: 2, dv: 0,
-    horizon, legacy, passBody: trip.mode === 'assist' && !trip.flybyDone ? trip.flyby : null,
+    horizon, legacy, tExpect: trip.tExpect ?? null, lateSlack: 0.3 * (trip.tH || 0), passBody: trip.mode === 'assist' && !trip.flybyDone ? trip.flyby : null,
     refined: false, ok: false, score: Infinity,
   };
 }
@@ -504,8 +520,10 @@ function evalCorrection(base, plan, angle, dv) {
     return { score: 1e7 };
   }
   const want = arrivalRadius(T);
-  const score = (best < T.hill ? Math.abs(best - want) + ARRIVAL_SPEED_WEIGHT * bestV : 1e4 + best) + cost
+  let score = (best < T.hill ? Math.abs(best - want) + ARRIVAL_SPEED_WEIGHT * bestV : 1e4 + best) + cost
     + (plan.timeW || 0) * (bestT - plan.tStart);
+  // don't fix a near miss by waiting for a later pass (another whole lap)
+  if (plan.tExpect != null) score += LATE_W * Math.max(0, bestT - plan.tExpect - plan.lateSlack);
   return { score, ca: best - T.radius, tArrive: bestT, acc, dur };
 }
 
@@ -616,6 +634,8 @@ export class Planner {
   burnDone(plan) {
     const trip = this.trip;
     if (!trip) return;
+    // when a planned departure meant to arrive (corrections keep to it)
+    if (plan.kind === 'depart' && plan.tArrive != null) { trip.tExpect = plan.tArrive; trip.tH = plan.H.tH; }
     if (plan.kind === 'depart') trip.stage = trip.mode === 'bielliptic' || trip.mode === 'assist' ? 'aim' : 'cruise';
     else if (plan.kind === 'aim') trip.stage = 'cruise';
     this.plan = null; this.status = '';
@@ -647,7 +667,7 @@ export class Planner {
           const legacy = trip.mode === 'hohmann';
           this.plan = planCapture(sim, T, visit, legacy);
           // inside the well on a doomed or loose orbit: rescue burn now
-          if (!legacy && sim.body === T && (!this.plan || !this.plan.ok) && (!visit || visit.impact || (pred.fate && pred.fate.kind !== 'holds'))) {
+          if (sim.body === T && (!this.plan || !this.plan.ok) && (!visit || visit.impact || (pred.fate && pred.fate.kind !== 'holds'))) {
             const r = planRescue(sim, T);
             if (r.ok) this.plan = r;
           }

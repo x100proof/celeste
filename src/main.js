@@ -600,14 +600,12 @@ function toast(big, small = '', cls = '') {
   toastTimer = setTimeout(() => toastEl.classList.remove('show'), 3200);
 }
 
+// Every countdown and duration is shown in real time (days, hours, minutes)
+// on the calendar's scale, never in raw game seconds.
 function fmtTime(s) {
-  if (!isFinite(s)) return '∞';
-  s = Math.max(0, Math.round(s));
-  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
-  const mm = String(m).padStart(2, '0'), ss = String(sec).padStart(2, '0');
-  return h ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
+  return isFinite(s) ? fmtSpan(s) : '∞';
 }
-const fmtCount = (s) => (s < 10 ? Math.max(0, s).toFixed(1) + ' s' : fmtTime(s));
+const fmtCount = fmtTime;
 const fmtD = (d) => (!isFinite(d) ? '—' : Math.abs(d) >= 1000 ? d.toFixed(0) + ' u' : d.toFixed(1) + ' u');
 
 let hudTick = 0;
@@ -733,12 +731,12 @@ function updateTargetHud() {
       const cap = p.kind === 'capture';
       line = easyBurn ? `<span class="t">BURNING</span> ${fmtCount(p.dur - easyBurn.elapsed)} left`
         : tS > 0 && p.kind === 'aim'
-          ? `${ap.trip && ap.trip.mode === 'bielliptic' ? 'far-point burn' : 'flyby aim'} <span class="t">${p.dur.toFixed(1)} s</span><br>in <span class="t">${fmtCount(tS)}</span>`
+          ? `${ap.trip && ap.trip.mode === 'bielliptic' ? 'far-point burn' : 'flyby aim'} <span class="t">${fmtSpan(p.dur)}</span><br>in <span class="t">${fmtCount(tS)}</span>`
         : tS > 0 && p.kind === 'correct'
-          ? `correction <span class="t">${p.dur.toFixed(1)} s${p.thrust < THRUST ? ' fine' : ''}</span> (${p.dv.toFixed(2)} u/s)<br>in <span class="t">${fmtCount(tS)}</span> · then pass ${fmtD(p.ca)} up`
+          ? `correction <span class="t">${fmtSpan(p.dur)}${p.thrust < THRUST ? ' fine' : ''}</span> (${p.dv.toFixed(2)} u/s)<br>in <span class="t">${fmtCount(tS)}</span> · then pass ${fmtD(p.ca)} up`
         : tS > 0 ? (cap
-          ? `capture burn <span class="t">${p.dur.toFixed(1)} s</span> retrograde<br>in <span class="t">${fmtCount(tS)}</span> · at ${fmtD(p.ca)} up`
-          : `burn <span class="t">${p.dur.toFixed(1)} s</span> in <span class="t">${fmtCount(tS)}</span><br>arrive ${fmtD(p.ca)} up · window every ${fmtTime(p.synodic)}`)
+          ? `capture burn <span class="t">${fmtSpan(p.dur)}</span> retrograde<br>in <span class="t">${fmtCount(tS)}</span> · at ${fmtD(p.ca)} up`
+          : `burn <span class="t">${fmtSpan(p.dur)}</span> in <span class="t">${fmtCount(tS)}</span><br>arrive ${fmtD(p.ca)} up · window every ${fmtTime(p.synodic)}`)
         : `<span class="t">BURN NOW</span>`;
       break;
     }
@@ -933,7 +931,7 @@ function handleEvents(events) {
     if (ev.type === 'ignition') {
       if (tripStartT == null && ap.trip) tripStartT = sim.t;
       dbg.record('event', 'ignition', { kind: ev.plan.kind, dur: ev.plan.dur, thrust: ev.plan.thrust, t: sim.t });
-      toast('Ignition', ev.plan.kind === 'brach' ? 'full thrust · flip halfway' : `${ev.plan.dur.toFixed(1)} s planned burn`, 'go');
+      toast('Ignition', ev.plan.kind === 'brach' ? 'full thrust · flip halfway' : `<span class="span">${fmtSpan(ev.plan.dur)}</span> planned burn`, 'go');
       updateModeButtons();
       continue;
     }
@@ -1375,7 +1373,7 @@ function drawGuides(wpp) {
     const armedNow = !easyBurn && tS > 0 && tS < p.armWindow;
     const txt = easyBurn ? `BURNING · ${fmtCount(p.dur - easyBurn.elapsed)} left`
       : armedNow ? `${p.kind === 'capture' ? 'CAPTURE' : p.kind === 'correct' ? 'CORRECTION' : 'DEPARTURE'} · ignition in ${fmtCount(tS)}`
-      : tS > 0 ? `${p.kind === 'capture' ? 'CAPTURE' : p.kind === 'correct' ? 'CORRECTION' : p.kind === 'aim' ? (ap.trip && ap.trip.mode === 'bielliptic' ? 'FAR-POINT BURN' : 'FLYBY AIM') : 'BURN'} ${p.dur.toFixed(1)} s${(p.thrust || THRUST) < THRUST ? ' fine' : ''} · T-${fmtCount(tS)}` : 'BURN NOW';
+      : tS > 0 ? `${p.kind === 'capture' ? 'CAPTURE' : p.kind === 'correct' ? 'CORRECTION' : p.kind === 'aim' ? (ap.trip && ap.trip.mode === 'bielliptic' ? 'FAR-POINT BURN' : 'FLYBY AIM') : 'BURN'} ${fmtSpan(p.dur)}${(p.thrust || THRUST) < THRUST ? ' fine' : ''} · T-${fmtCount(tS)}` : 'BURN NOW';
     placeLabel('burn', 'burn', txt, pts[0], pts[1], 12);
     tint('burn', css, k);
   }

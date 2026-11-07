@@ -23,9 +23,10 @@ export function fmtDate(t) {
   return `${d.getDate()} ${MONTHS[d.getMonth()]} ${d.getFullYear()} ${h12}${h < 12 ? 'am' : 'pm'}`;
 }
 
-/** A game-time span as real days/hours/minutes: "150d03h04m". */
+/** A game-time span as real days/hours/minutes: "150d03h04m" (or "03h04m"). */
 export function fmtSpan(dt) {
   const mins = Math.max(0, Math.round((dt * REAL_PER_GAME) / 60));
   const d = Math.floor(mins / 1440), h = Math.floor((mins % 1440) / 60), m = mins % 60;
-  return `${d}d${String(h).padStart(2, '0')}h${String(m).padStart(2, '0')}m`;
+  const hm = `${String(h).padStart(2, '0')}h${String(m).padStart(2, '0')}m`;
+  return d > 0 ? `${d}d${hm}` : hm; // days only when there are any: "03h04m"
 }
