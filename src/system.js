@@ -51,6 +51,14 @@ export const PLANETS = [
 
 export const HOME = 2; // Earth
 
+// Parking orbits (the start orbit and every arrival) sit low over the surface,
+// so the ship visibly goes round at 1x time. PERI_MIN_K is the lowest
+// periapsis a capture may leave (both in planet radii).
+export const PARK_K = 1.4;
+export const PERI_MIN_K = 1.15;
+/** Radius of the circular parking orbit around planet P. */
+export function parkRadius(P) { return Math.min(PARK_K * P.radius, 0.3 * P.hill); }
+
 /** Heliocentric position/velocity of planet i at time t. */
 export function planetState(i, t, out = new Float64Array(4)) {
   const p = PLANETS[i];

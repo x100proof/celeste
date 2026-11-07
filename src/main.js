@@ -340,6 +340,29 @@ function cycleTarget() {
   setTarget(order[(k + 1) % order.length]);
 }
 
+// ---- hidden tuning panel (D): live sliders for camera framing, saved per browser
+const TUNING_KEY = 'celeste.tuning';
+const tuning = { transferZoom: 1.3 }; // >1 = transfer shots zoomed further out
+try { Object.assign(tuning, JSON.parse(localStorage.getItem(TUNING_KEY) || '{}')); } catch (e) { /* no storage: defaults */ }
+if (!(tuning.transferZoom >= 0.5 && tuning.transferZoom <= 4)) tuning.transferZoom = 1.3;
+const tunePanel = document.getElementById('tune');
+const tuneZoom = document.getElementById('tune-zoom');
+const tuneZoomVal = document.getElementById('tune-zoom-val');
+// the slider is logarithmic: 0 = 0.5x, 1000 = 4x
+const zoomToSlider = (z) => Math.round((1000 * Math.log(z / 0.5)) / Math.log(8));
+const sliderToZoom = (v) => 0.5 * Math.pow(8, v / 1000);
+function showTuning() {
+  tuneZoom.value = zoomToSlider(tuning.transferZoom);
+  tuneZoomVal.textContent = tuning.transferZoom.toFixed(2) + '×';
+}
+function saveTuning() { try { localStorage.setItem(TUNING_KEY, JSON.stringify(tuning)); } catch (e) { /* ignore */ } }
+tuneZoom.addEventListener('input', () => {
+  tuning.transferZoom = +sliderToZoom(+tuneZoom.value).toFixed(2);
+  showTuning(); saveTuning();
+});
+document.getElementById('tune-reset').addEventListener('click', () => { tuning.transferZoom = 1.3; showTuning(); saveTuning(); });
+showTuning();
+
 const hint = document.getElementById('hint');
 let hintTimer = setTimeout(() => hint.classList.add('fade'), 14000);
 
@@ -353,6 +376,7 @@ addEventListener('keydown', (e) => {
   else if (k === 'c' || k === 'C') recenter();
   else if (k === 't' || k === 'T') cycleTarget();
   else if (k === ' ' && !e.repeat) setPaused(!paused);
+  else if ((k === 'd' || k === 'D') && !e.repeat) tunePanel.classList.toggle('hidden');
 
   else if (k === '+' || k === '=') zoomStep(1 / 1.6);
   else if (k === '-' || k === '_') zoomStep(1.6);
@@ -860,6 +884,8 @@ function cinematic(dt, shipX, shipY) {
     }
   };
   if (phase !== camBlend.phase) camBlend.phase = phase;
+  // transfer shots (burns, leaving/arriving, cruise) are widened by the tunable zoom
+  if (phase === 'burn' || phase === 'cruise' || phase.startsWith('well')) half *= tuning.transferZoom;
   half = Math.min(ZMAX, Math.max(ZMIN, half));
   spring(camSpring, 'x', cx - shipX, 1.4);
   spring(camSpring, 'y', cy - shipY, 1.4);
@@ -909,7 +935,7 @@ function directWarp(dt, plan, tS) {
   else if (flybyEnc) target = cap = profile(flybyEnc.t - sim.t, 2); // slingshot: watch the flyby
   else if (enc && enc.t > sim.t) target = cap = profile(enc.t - sim.t, 2);
   else if (planner.plan && planner.plan.tMid > sim.t) target = cap = profile(planner.plan.tMid - sim.t, 1); // waiting for a window
-  else target = Math.min(20, 5 * nudge); // idle
+  else target = nudge; // idle (parked): real time, 1x unless nudged
   target = Math.min(3000, Math.max(0.25, target));
   // ease up gently after an event; the profile itself handles slowing down
   warp = target > warp ? Math.exp(THREE.MathUtils.lerp(Math.log(warp), Math.log(target), 1 - Math.exp(-dt * 2.5))) : target;

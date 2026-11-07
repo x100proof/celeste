@@ -41,6 +41,7 @@ Fuel is total thrust delivered (delta-v), shown as a plain number.
 | Drag, scroll, pinch, `+` / `−` | Pan and zoom (switches the camera to manual) |
 | Camera button or `C` | Back to the cinematic camera |
 | `G` or the ghost button | Ghost planets: where planets will be when you arrive |
+| `D` | Hidden debug panel: a slider for how far out the cinematic camera frames a transfer (saved in your browser) |
 
 ## How it works
 

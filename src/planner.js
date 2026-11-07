@@ -11,7 +11,7 @@
 // stays valid until the ship next fires its engine.
 
 import { timeFromPeri, timeToNu, nuOfPos, kepler, elements, TAU } from './physics.js';
-import { PLANETS, GM_SUN, THRUST, FINE, planetState, bodyState, bodyOf } from './system.js';
+import { PLANETS, GM_SUN, THRUST, FINE, PERI_MIN_K, planetState, bodyState, bodyOf, parkRadius } from './system.js';
 import { Trajectory, gravity, rk4, stepSize, BURN_H, closedOrbit } from './nbody.js';
 
 const ps = new Float64Array(4);
@@ -31,9 +31,7 @@ const LATE_W = 0.2, LATE_K = 1.3;
 /** Hohmann: score units per u/s of departure burn beyond the transfer's need. */
 const HOH_FUEL_W = 10;
 
-export function arrivalRadius(T) {
-  return Math.min(2.5 * T.radius, Math.max(1.5 * T.radius, 0.3 * T.hill));
-}
+export function arrivalRadius(T) { return parkRadius(T); }
 
 function hohmann(from, to, parkR) {
   const P = PLANETS[from], T = PLANETS[to];
@@ -338,7 +336,7 @@ export function planCapture(sim, target, visit, legacy = false) {
     if (!el.bound) score += 100;
     else if (el.ra > 0.9 * T.hill) score += 50;
     else if (el.ra > 0.5 * T.hill) score += 2 * (el.ra / T.hill); // prefer tight, stable orbits
-    if (el.rp < 1.5 * T.radius) score += 100; // a low periapsis decays into the surface under solar tides
+    if (el.rp < PERI_MIN_K * T.radius) score += 100; // a low periapsis decays into the surface under solar tides
     return score;
   };
   let bestOff = 0, bestDur = dur0, bestScore = Infinity;
@@ -396,7 +394,7 @@ export function planRescue(sim, target) {
     let score = el.e + 0.05 * d;
     if (!el.bound) score += 100;
     else if (el.ra > 0.5 * T.hill) score += 10 * (el.ra / T.hill);
-    if (el.rp < 1.5 * T.radius) score += 100;
+    if (el.rp < PERI_MIN_K * T.radius) score += 100;
     return score;
   };
   let bestA = 0, bestD = 0.5, best = Infinity;

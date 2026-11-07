@@ -6,7 +6,7 @@
 // Fuel is the total thrust delivered (the integral of |acceleration| dt, i.e.
 // delta-v), scaled by FUEL_SCALE and shown as a plain number.
 
-import { PLANETS, THRUST, GM_SUN, planetState, bodyState } from './system.js';
+import { PLANETS, THRUST, GM_SUN, PERI_MIN_K, planetState, bodyState } from './system.js';
 import { Sim, gravity, sunAccel, setSunLift } from './nbody.js';
 import { elements } from './physics.js';
 import { Planner, pickFlyby, arrivalRadius } from './planner.js';
@@ -411,7 +411,7 @@ export class Autopilot {
           if (sim.body === tr.target) {
             bodyState(tr.target, sim.t, ps);
             const el = elements(sim.x - ps[0], sim.y - ps[1], sim.vx - ps[2], sim.vy - ps[3], T.mu);
-            const good = el.bound && el.rp >= 1.3 * T.radius && el.ra <= 0.45 * T.hill;
+            const good = el.bound && el.rp >= PERI_MIN_K * T.radius && el.ra <= 0.45 * T.hill;
             if (good && (el.e < 0.04 || tgo < BRAKE_END)) {
               tr.stage = 'cruise'; // the normal logic confirms the capture
               events.push({ type: 'cut', plan: { kind: 'brach' } });

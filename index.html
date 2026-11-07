@@ -55,6 +55,14 @@
   </div>
 </nav>
 
+<aside id="tune" class="panel hidden" aria-label="Debug tuning">
+  <header>DEBUG <small>D to hide</small></header>
+  <label for="tune-zoom">Transfer camera zoom <b id="tune-zoom-val"></b></label>
+  <input type="range" id="tune-zoom" min="0" max="1000" step="1">
+  <div class="ends"><span>closer</span><span>wider</span></div>
+  <button class="btn" id="tune-reset">Reset</button>
+</aside>
+
 <div id="toast"></div>
 <div id="hint">click a planet (top left) to fly there · click a body or the ship to centre on it · <b>Space</b> pause · <b>,</b> <b>.</b> nudge time · <b>G</b> ghosts · <b>C</b> cinematic camera · drag to pan · scroll to zoom</div>
 

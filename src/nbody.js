@@ -6,7 +6,7 @@
 // space. While coasting, the ship follows a cached Trajectory: the same nodes
 // are used to draw the prediction, so the ship moves exactly along the line.
 
-import { PLANETS, GM_SUN, SUN, HOME, planetState, bodyState, bodyOf } from './system.js';
+import { PLANETS, GM_SUN, SUN, HOME, planetState, bodyState, bodyOf, parkRadius } from './system.js';
 import { elements } from './physics.js';
 
 const ETA = 0.01;      // step = ETA * dynamical time
@@ -227,7 +227,7 @@ export class Sim {
   /** Circular, prograde low orbit around the home planet. */
   reset() {
     const P = PLANETS[HOME];
-    const r = 22, v = Math.sqrt(P.mu / r), ang = Math.PI * 0.5;
+    const r = parkRadius(P), v = Math.sqrt(P.mu / r), ang = Math.PI * 0.5;
     planetState(HOME, this.t, pb);
     this.x = pb[0] + r * Math.cos(ang); this.y = pb[1] + r * Math.sin(ang);
     this.vx = pb[2] - v * Math.sin(ang); this.vy = pb[3] + v * Math.cos(ang);
