@@ -13,8 +13,11 @@ It is named after the orbital-mechanics game in Vernor Vinge's *The Peace War*.
 - **Purple line**: the orbit the ship is in right now, around the planet whose
   gravity well it is in, otherwise around the Sun.
 - **Green arcs**: upcoming burns. They turn from grey to green as the burn nears.
-- A cinematic camera that frames each phase (parked, departure, cruise, arrival)
-  and a time director that speeds through coasts but plays every burn in slow
+- A cinematic camera that frames each phase (parked, departure, cruise, arrival).
+  It stays on the planet while parked and while leaving it, follows the ship from the
+  end of the departure burn (or, for the torch, once it leaves the planet's gravity well),
+  and returns to the planet once the ship is captured.
+- A time director that speeds through coasts but plays every burn in slow
   motion. No wait before a burn is longer than about 30 seconds.
 
 ## Transfer types

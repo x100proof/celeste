@@ -180,10 +180,13 @@ function sweepLabels() {
 
 // mode 'cine': the cinematic director frames each phase; 'manual': the player panned/zoomed
 const cam = { x: 0, y: 0, halfH: 70, target: 70, follow: true, mode: 'cine', track: null };
-const camOff = { x: 0, y: 0 }; // cinematic framing centre, relative to the ship
+const camOff = { x: 0, y: 0 }; // cinematic framing centre, relative to the camera's anchor (camAnchor)
 // phase changes blend from the previous shot to the new one; within a phase the shot is tracked exactly
 const camBlend = { phase: '', t: 1, fromX: 0, fromY: 0 };
 const camSpring = { x: 0, vx: 0, y: 0, vy: 0, lh: Math.log(70), vlh: 0 };
+// the framing centre is held as an offset from an anchor: the ship (-2) or the planet in focus (its index)
+let camAnchor = -2;
+const camA = new Float64Array(4), camA0 = new Float64Array(4);
 const ZMIN = 6, ZMAX = 14000; // out to Saturn
 const worldPerPx = () => (2 * cam.halfH) / H;
 function worldToScreen(x, y) {
@@ -273,6 +276,7 @@ function recenter() {
   cam.track = null;
   cam.follow = true; cam.mode = 'cine';
   sim.world(wst); camOff.x = cam.x - wst[0]; camOff.y = cam.y - wst[1]; // glide from where we are
+  camAnchor = -2;
   Object.assign(camSpring, { x: camOff.x, y: camOff.y, vx: 0, vy: 0, lh: Math.log(cam.halfH), vlh: 0 });
   camBlend.phase = '';
   document.getElementById('b-center').classList.add('on');
@@ -868,12 +872,31 @@ function cinematic(dt, shipX, shipY) {
   const burnPlan = easyBurn ? easyBurn.plan : flyable;
   const tS = burnPlan ? burnPlan.tMid - burnPlan.dur / 2 - sim.t : Infinity;
   const burnSoon = !!easyBurn || (burnPlan && tS > -0.5 && tS / Math.max(warp, 0.25) < 6);
-  let phase;
+  let phase, anchor = -2; // -2: the shot follows the ship; >= 0: it is centred on that planet
+  const tr = ap.trip;
+  // leaving the start planet: until the departure burn is done (Hohmann), or
+  // until the torch has carried the ship out of the planet's gravity well
+  const departing = !!tr && sim.body >= 0 && sim.body === tr.origin && (tr.stage === 'depart' || tr.stage === 'brach');
+  // the departure burn is done but the ship is still inside the start planet's well: follow the ship
+  const leftOrigin = !!tr && sim.body >= 0 && sim.body === tr.origin && !departing;
   if (!sim.alive) { half = 45; phase = 'dead'; }
-  else if (burnSoon) {
+  else if (sim.body >= 0 && (departing || (sim.captured && !leftOrigin))) {
+    // in orbit, or on the way out of it: the planet is the subject and the ship circles it
+    const P = PLANETS[sim.body];
+    planetState(sim.body, sim.t, ps);
+    anchor = sim.body; cx = ps[0]; cy = ps[1];
+    const el = sim.elements();
+    half = Math.max((el.bound ? el.ra : 30) * 1.5, P.radius * 3);
+    const torchLit = !!tr && tr.stage === 'brach' && !!tr.brach && tr.brach.stage !== 'wait';
+    if (burnSoon || torchLit || !sim.captured) {
+      phase = 'depart' + sim.body;
+      // the planet stays centred, so the shot widens to keep the departing ship in it
+      half = Math.max(half, 1.3 * Math.max(Math.abs(shipY - ps[1]), Math.abs(shipX - ps[0]) / aspect));
+    } else phase = 'parked' + sim.body;
+  } else if (burnSoon) {
     phase = 'burn';
-    // close-up for the burn: around the planet if it is a planet-frame burn, else on the ship
-    if (burnPlan.frame >= 0) { // departure/capture: the ship and the planet, even before arrival
+    // capture (or other planet-frame) burns: the ship and the planet, even before arrival
+    if (burnPlan.frame >= 0) {
       planetState(burnPlan.frame, sim.t, ps);
       const r = Math.hypot(shipX - ps[0], shipY - ps[1]);
       const pts = [[ps[0], ps[1]], [shipX, shipY]];
@@ -883,14 +906,6 @@ function cinematic(dt, shipX, shipY) {
       }
       fit(pts, Math.max(Math.min(r * 1.25, 400), PLANETS[burnPlan.frame].radius * 2.6), 1.6);
     } else half = 26;
-  } else if (sim.body >= 0 && sim.captured) {
-    phase = 'parked' + sim.body;
-    // parked: the planet and the whole orbit
-    const P = PLANETS[sim.body];
-    planetState(sim.body, sim.t, ps);
-    const el = sim.elements();
-    cx = ps[0]; cy = ps[1];
-    half = Math.max((el.bound ? el.ra : 30) * 1.5, P.radius * 3);
   } else if (sim.body >= 0) {
     phase = 'well' + sim.body;
     // leaving or arriving at a planet: keep both in shot
@@ -923,17 +938,32 @@ function cinematic(dt, shipX, shipY) {
   };
   if (phase !== camBlend.phase) camBlend.phase = phase;
   // transfer shots (burns, leaving/arriving, cruise) are widened by the tunable zoom
-  if (phase === 'burn' || phase === 'cruise' || phase.startsWith('well')) half *= tuning.transferZoom;
+  if (phase === 'burn' || phase === 'cruise' || phase.startsWith('well') || phase.startsWith('depart')) half *= tuning.transferZoom;
   half = Math.min(ZMAX, Math.max(ZMIN, half));
-  spring(camSpring, 'x', cx - shipX, 1.4);
-  spring(camSpring, 'y', cy - shipY, 1.4);
+  const anchorAt = (a, out) => { if (a < 0) { out[0] = shipX; out[1] = shipY; } else planetState(a, sim.t, out); return out; };
+  anchorAt(anchor, camA);
+  if (anchor !== camAnchor) {
+    // a new subject: re-express the current offset from it, so the shot glides over instead of jumping
+    anchorAt(camAnchor, camA0);
+    camSpring.x += camA0[0] - camA[0]; camSpring.y += camA0[1] - camA[1];
+    camAnchor = anchor;
+  }
+  spring(camSpring, 'x', cx - camA[0], 1.4);
+  spring(camSpring, 'y', cy - camA[1], 1.4);
   spring(camSpring, 'lh', Math.log(half), 1.8);
   cam.halfH = Math.exp(camSpring.lh);
-  const maxX = 0.8 * cam.halfH * aspect, maxY = 0.8 * cam.halfH;
-  camSpring.x = Math.max(-maxX, Math.min(maxX, camSpring.x));
-  camSpring.y = Math.max(-maxY, Math.min(maxY, camSpring.y));
+  if (anchor < 0) {
+    // following the ship: keep it inside the central 80% of the view
+    const maxX = 0.8 * cam.halfH * aspect, maxY = 0.8 * cam.halfH;
+    camSpring.x = Math.max(-maxX, Math.min(maxX, camSpring.x));
+    camSpring.y = Math.max(-maxY, Math.min(maxY, camSpring.y));
+  } else {
+    // centred on a planet: never let a fast-departing ship outrun the zoom
+    const need = Math.max(Math.abs(shipY - camA[1] - camSpring.y), Math.abs(shipX - camA[0] - camSpring.x) / aspect) / 0.9;
+    if (need > cam.halfH) { cam.halfH = Math.min(ZMAX, need); camSpring.lh = Math.log(cam.halfH); camSpring.vlh = Math.max(0, camSpring.vlh); }
+  }
   camOff.x = camSpring.x; camOff.y = camSpring.y;
-  cam.x = shipX + camOff.x; cam.y = shipY + camOff.y;
+  cam.x = camA[0] + camOff.x; cam.y = camA[1] + camOff.y;
   cam.target = cam.halfH;
 }
 
@@ -1475,4 +1505,4 @@ document.getElementById('b-center').classList.add('on');
 requestAnimationFrame(frame);
 
 // debug/test hook
-window.__celeste = { sun, sim, cam, ap, date: () => realDate(sim.t), predict: () => pred, keys, held, planner, setTarget, setMode, estimates, setHold, getWarp: () => warp, nudgeWarp, realTime: () => realTime, particles };
+window.__celeste = { sun, sim, cam, ap, date: () => realDate(sim.t), predict: () => pred, keys, held, planner, setTarget, setMode, estimates, setHold, getWarp: () => warp, camInfo: () => ({ anchor: camAnchor, offX: camSpring.x, offY: camSpring.y, halfH: cam.halfH }), nudgeWarp, realTime: () => realTime, particles };
